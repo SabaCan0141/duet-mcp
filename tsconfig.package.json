@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "duet",
+    "outDir": "lib",
+    "declaration": true
+  },
+  "include": ["duet/**/*.ts", "duet/**/*.tsx"],
+  "exclude": []
+}

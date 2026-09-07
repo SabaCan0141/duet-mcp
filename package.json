@@ -1,0 +1,97 @@
+{
+  "name": "duet-mcp",
+  "version": "0.6.1",
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:package && npm run build:server && npm run build:web",
+    "build:server": "tsc -p tsconfig.json",
+    "build:web": "for c in */ui/vite.config.ts; do vite build --config \"$c\" || exit 1; done",
+    "dev:web": "vite --config ${DUET_APP:-template}/ui/vite.config.ts",
+    "start": "node dist/${DUET_APP:-template}/main.js",
+    "typecheck": "npm run build:package && tsc -p tsconfig.json --noEmit && for c in */ui/tsconfig.json; do tsc -p \"$c\" || exit 1; done",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "build:package": "tsc -p tsconfig.package.json",
+    "prepack": "npm run build:package",
+    "test:package": "node scripts/test-package.mjs"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "hono": "^4.6.14",
+    "playwright": "^1.49.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.17",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^3.23.8"
+  },
+  "license": "MIT",
+  "description": "A shared JSON document for humans through a GUI and LLMs through MCP.",
+  "author": "Taniguchi Ryoga (SabaCan0141)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SabaCan0141/duet-mcp.git"
+  },
+  "homepage": "https://github.com/SabaCan0141/duet-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/SabaCan0141/duet-mcp/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "lib",
+    "template/*.ts",
+    "template/ui/*.ts",
+    "template/ui/*.tsx",
+    "template/ui/*.json",
+    "template/ui/*.html",
+    "template/ui/*.css",
+    "doc/README.jp.md"
+  ],
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js"
+    },
+    "./server": {
+      "types": "./lib/server.d.ts",
+      "import": "./lib/server.js"
+    },
+    "./react": {
+      "types": "./lib/client.d.ts",
+      "import": "./lib/client.js"
+    },
+    "./wire": {
+      "types": "./lib/wire.d.ts",
+      "import": "./lib/wire.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "mcp",
+    "gui",
+    "human-in-the-loop",
+    "react"
+  ],
+  "peerDependencies": {
+    "react": "^18.3.1",
+    "zod": "^3.23.8"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  }
+}

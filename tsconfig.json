@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "jsx": "react-jsx",
+    "rootDir": ".",
+    "outDir": "dist",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "types": ["node"]
+  },
+  // アプリを 1 つ足すたびに列挙を直したくないので、拾ってから除く形にする。
+  // ディレクトリを作ってコピーするだけで tsc の対象になる。
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["dist", "lib", "duet/client.tsx", "**/ui/**", "**/node_modules/**"]
+}
