@@ -345,3 +345,25 @@ GitHub Actions は push / pull request 時に、Ubuntu・macOS と Node.js 22・
 配布物の独立インストール検証は `npm run test:package` で実行する。
 一時プロジェクトで型定義・GUI・MCP・保存・blob・撮影・再起動を確認し、終了後に削除する。
 この検証は依存パッケージとChromiumをダウンロードする。CIでも実行する。
+
+## 独自のHTTP・MCP入口を使う場合
+
+通常は `runApp(app)` だけで起動する。独自のネットワーク受付やMCPツールが必要なアプリでは、任意の第2引数を渡せる。
+
+```ts
+await runApp(app, {
+  http(http, store) {
+    http.get("/custom/state", c => c.json(store().snapshot("human")));
+  },
+  async mcp(call) {
+    // 独自MCPサーバーを接続する。call(path, init) は選出済みdaemonへ委譲する。
+    // 例: await call("/custom/state")
+  },
+});
+```
+
+`http` は標準ルートより前にHonoへルートを登録する。client側でも登録されるため、状態の取得やタイマー・LAN受付などの初期化は、実際のリクエストを受けたときに行う。`store()` はdaemonが所有する同じ `DocStore` を返す。独自ルートもアプリIDの照合を通るが、認証やレスポンスの秘匿はアプリが実装する。
+
+`mcp` を省略すると従来の標準MCPツールを登録する。指定した場合は独自MCPサーバーの接続まで担当する。渡された `call` は標準MCPと同じdaemon選出・通信回復を使い、通信失敗時にPOSTを自動再送しない。
+
+`duet-mcp/server` は `RunOptions` 型と `DocStore` も公開する。`DocStore` を直接生成する場合、所有プロセスの選出は行わない。通常のアプリ起動には `runApp` を使う。

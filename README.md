@@ -365,3 +365,9 @@ versions recorded in the shared `package-lock.json`.
 ## License
 
 [MIT License](LICENSE) — Copyright (c) 2026 Taniguchi Ryoga (SabaCan0141).
+
+### Custom HTTP and MCP adapters
+
+`runApp(app, { http, mcp })` optionally accepts adapters. `http(hono, getStore)` registers routes before the standard routes; call `getStore()` inside a request to access the daemon's document store. Registration also runs in client processes, so initialize timers and other owner-only resources lazily when handling a request. Custom routes retain app-ID checks; application authentication and response filtering remain the app's responsibility.
+
+`mcp(call)` connects an application-specific MCP server instead of the standard tools. Its `call(path, init)` uses the same daemon election and recovery as the default MCP adapter, without replaying failed POST requests. Omitting either option keeps its default behavior. `RunOptions` and `DocStore` are exported from `duet-mcp/server`; constructing a store directly does not elect an owner.

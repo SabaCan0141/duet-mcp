@@ -63,20 +63,80 @@ test("browser preserves a draft through external edits and publishes the rendere
     const px=r.x+x*r.width/720,py=r.y+y*r.height/480;
     await page.mouse.move(px,py);await page.mouse.down();
     await page.mouse.move(px+dx*r.width/720,py+dy*r.height/480,{steps:4});
+    assert.equal(await canvas.locator("..").getByRole("button",{name:"Apply",exact:true}).count(),0);
+    assert.equal(await canvas.locator("..").getByRole("button",{name:"Cancel",exact:true}).count(),0);
     if(external)store.run("set_text",{baseRevision:store.revision,text:"during drag"},"llm");
     await page.mouse.up();
   };
   await drag(300,200,40,20);
   await page.waitForFunction(()=>document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.value==="200");
-  await page.waitForFunction(()=>!document.querySelector('canvas')?.parentElement?.querySelector('[role="status"]'));
+  await page.waitForFunction(()=>!document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.disabled);
   assert.equal(store.snapshot("human").doc.box.x,200);
   for(const corner of ["se","nw","ne","sw"]) {
     const b=store.snapshot("human").doc.box;
     await drag(corner.includes("w")?b.x:b.x+b.width,corner.includes("n")?b.y:b.y+b.height,corner.includes("w")?-10:10,corner.includes("n")?-10:10);
-    await page.waitForFunction(()=>!document.querySelector('canvas')?.parentElement?.querySelector('[role="status"]'));
+    await page.waitForFunction(()=>!document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.disabled);
     assert.equal(store.snapshot("human").doc.box.width,b.width+10);
     assert.equal(store.snapshot("human").doc.box.height,b.height+10);
   }
+  // No assertion or deliberate pause between press, move, and release.
+  for (let i=0;i<20;i++) {
+    const b=store.snapshot("human").doc.box;
+    const r=(await canvas.boundingBox())!;
+    const dx=i%2===0?15:-15;
+    await page.mouse.move(r.x+(b.x+30)*r.width/720,r.y+(b.y+30)*r.height/480);
+    await page.mouse.down();
+    await page.mouse.move(r.x+(b.x+30+dx)*r.width/720,r.y+(b.y+30)*r.height/480);
+    await page.mouse.up();
+    await page.waitForFunction(()=>!document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.disabled);
+    assert.equal(store.snapshot("human").doc.box.x,b.x+dx,`quick drag ${i}`);
+  }
+  for (const cancellation of ["escape","pointercancel"]) {
+    const original=store.snapshot("human");
+    await canvas.evaluate((element,{b,cancellation})=>{
+      const r=element.getBoundingClientRect();
+      const dispatch=(type:string,dx:number)=>element.dispatchEvent(new PointerEvent(type,{
+        bubbles:true,pointerId:1,pointerType:"mouse",button:0,buttons:1,
+        clientX:r.left+(b.x+30+dx)*r.width/720,clientY:r.top+(b.y+30)*r.height/480,
+      }));
+      dispatch("pointerdown",0);dispatch("pointermove",10);
+      if(cancellation==="escape")element.dispatchEvent(new KeyboardEvent("keydown",{bubbles:true,key:"Escape"}));
+      else dispatch("pointercancel",10);
+      dispatch("lostpointercapture",10);dispatch("pointerup",10);
+    },{b:original.doc.box,cancellation});
+    await page.waitForFunction(()=>!document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.disabled);
+    assert.equal(await page.getByLabel("Box x",{exact:true}).inputValue(),String(original.doc.box.x));
+    assert.equal(store.revision,original.revision);
+  }
+  // Capture loss on release must not discard the last drag position.
+  const captureBefore=store.snapshot("human").doc.box;
+  await canvas.evaluate((element,b)=>{
+    const r=element.getBoundingClientRect();
+    for(const [type,dx] of [["pointerdown",0],["pointermove",12],["lostpointercapture",12],["pointerup",12]] as const) {
+      element.dispatchEvent(new PointerEvent(type,{
+        bubbles:true,pointerId:1,pointerType:"mouse",button:0,
+        buttons:type==="pointerdown"||type==="pointermove"?1:0,
+        clientX:r.left+(b.x+30+dx)*r.width/720,clientY:r.top+(b.y+30)*r.height/480,
+      }));
+    }
+  },captureBefore);
+  await page.waitForFunction(()=>!document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.disabled);
+  assert.equal(store.snapshot("human").doc.box.x,captureBefore.x+12,"capture loss must commit, not roll back");
+  // A quick release can arrive at a new position without a final pointermove.
+  const quickBefore=store.snapshot("human").doc.box;
+  await canvas.evaluate((element, b) => {
+    const r=element.getBoundingClientRect();
+    const event=(type:string,dx:number,dy:number)=>element.dispatchEvent(new PointerEvent(type,{
+      bubbles:true,pointerId:1,pointerType:"mouse",button:0,buttons:type==="pointerup"?0:1,
+      clientX:r.left+(b.x+30+dx)*r.width/720,clientY:r.top+(b.y+30+dy)*r.height/480,
+    }));
+    event("pointerdown",0,0);
+    event("pointerup",15,10);
+  },quickBefore);
+  await page.waitForFunction(x=>document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.value===String(x),quickBefore.x+15);
+  await page.waitForFunction(()=>!document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.disabled);
+  assert.equal(store.snapshot("human").doc.box.x,quickBefore.x+15);
+  assert.equal(store.snapshot("human").doc.box.y,quickBefore.y+10);
   const before=store.snapshot("human").doc.box;
   await drag(before.x+30,before.y+30,20,20,true);
   await page.getByRole("alert").waitFor();

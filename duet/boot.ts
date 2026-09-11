@@ -2,7 +2,7 @@ import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import type { Hono } from "hono";
+import { Hono } from "hono";
 import { DocStore } from "./doc.js";
 import { createHttpApp } from "./http.js";
 import { registerTools, type Call } from "./mcp.js";
@@ -28,7 +28,14 @@ function listen(http: Hono, port: number): Promise<Server | null> {
   });
 }
 
-export async function runApp<Doc>(app: AppDef<Doc>): Promise<void> {
+export type RunOptions<Doc> = {
+  /** 独自 HTTP 入口。状態・副作用はリクエスト時に初期化する（client でも登録される）。 */
+  http?: (http: Hono, store: () => DocStore<Doc>) => void;
+  /** 独自 MCP 入口も、同じ daemon 選出・通信回復を使う。省略時は標準ツール。 */
+  mcp?: (call: Call) => Promise<void>;
+};
+
+export async function runApp<Doc>(app: AppDef<Doc>, options: RunOptions<Doc> = {}): Promise<void> {
   const port = portFor(app.id);
   const base = baseUrlFor(app.id);
   const actor = process.env.DUET_ACTOR ?? "llm";
@@ -47,7 +54,16 @@ export async function runApp<Doc>(app: AppDef<Doc>): Promise<void> {
    */
   const bind = async (): Promise<boolean> => {
     if (owned) return false;
-    const bound = await listen(createHttpApp(app, getStore), port);
+    const http = new Hono();
+    http.use("*", async (c, next) => {
+      const expected = c.req.header("x-duet-app-id");
+      if (expected !== undefined && expected !== app.id)
+        return c.json({ error: "接続先は別の duet アプリ。" }, 409);
+      await next();
+    });
+    options.http?.(http, getStore);
+    http.route("/", createHttpApp(app, getStore));
+    const bound = await listen(http, port);
     if (!bound) return false;
     owned = bound;
     wrongApp = null;
@@ -120,9 +136,13 @@ export async function runApp<Doc>(app: AppDef<Doc>): Promise<void> {
     );
   };
 
-  const mcp = new McpServer({ name: app.id, version: app.version });
-  registerTools(mcp, app, call);
-  await mcp.connect(new StdioServerTransport());
+  if (options.mcp) {
+    await options.mcp(call);
+  } else {
+    const mcp = new McpServer({ name: app.id, version: app.version });
+    registerTools(mcp, app, call);
+    await mcp.connect(new StdioServerTransport());
+  }
   console.error(`[duet] mcp connected over stdio as "${actor}"`);
 
   // 登録はここで行う。**これより前に移動させないこと。**

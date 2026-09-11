@@ -52,6 +52,30 @@ export function Canvas({ snap, settings, box: saved }: { snap: Observed<Doc>; se
     for (const [mode,x,y] of corners) if (Math.abs(p.x-x)<radius && Math.abs(p.y-y)<radius) return mode;
     return p.x>=box.x && p.x<=box.x+box.width && p.y>=box.y && p.y<=box.y+box.height ? "move" : "";
   };
+  const updateGesture = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const g = gesture.current;
+    if (!g || g.id !== e.pointerId) return;
+    const p = point(e);
+    const dx=p.x-g.x,dy=p.y-g.y,b=g.box; let next:Box;
+    if(g.mode==="move") next={...b,x:clamp(b.x+dx,0,720-b.width),y:clamp(b.y+dy,0,480-b.height)};
+    else {
+      const left=g.mode.includes("w")?clamp(b.x+dx,0,b.x+b.width-64):b.x;
+      const top=g.mode.includes("n")?clamp(b.y+dy,0,b.y+b.height-64):b.y;
+      const right=g.mode.includes("e")?clamp(b.x+b.width+dx,b.x+64,720):b.x+b.width;
+      const bottom=g.mode.includes("s")?clamp(b.y+b.height+dy,b.y+64,480):b.y+b.height;
+      next={x:left,y:top,width:right-left,height:bottom-top};
+    }
+    g.latest=Object.fromEntries(Object.entries(next).map(([k,v])=>[k,Math.round(v)])) as Box; edit.setValue(g.latest);
+  };
+  const finishGesture = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const g = gesture.current;
+    if (!g || g.id !== e.pointerId) return;
+    // Capture-loss coordinates need not be the release position. Keep the last preview.
+    if (e.type === "pointerup") updateGesture(e);
+    gesture.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    void edit.run("set_box", g.latest).catch(() => {});
+  };
   const cancel = () => { if (gesture.current) { gesture.current=null; edit.cancel(); } };
   return <section className="panel overflow-hidden">
     <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4"><h2 className="text-sm font-semibold">Canvas playground</h2><span className="rounded-md bg-slate-100 px-2 py-1 text-[10px] text-slate-500">720 × 480</span></div>
@@ -68,24 +92,15 @@ export function Canvas({ snap, settings, box: saved }: { snap: Observed<Doc>; se
           const p=point(e), g=gesture.current;
           if(!g) { const mode=settings.visible ? hit(p) : ""; e.currentTarget.style.cursor=mode==="move"?"grab":mode==="nw"||mode==="se"?"nwse-resize":mode?"nesw-resize":"default"; return; }
           if(g.id!==e.pointerId) return;
-          const dx=p.x-g.x,dy=p.y-g.y,b=g.box; let next:Box;
-          if(g.mode==="move") next={...b,x:clamp(b.x+dx,0,720-b.width),y:clamp(b.y+dy,0,480-b.height)};
-          else {
-            const left=g.mode.includes("w")?clamp(b.x+dx,0,b.x+b.width-64):b.x;
-            const top=g.mode.includes("n")?clamp(b.y+dy,0,b.y+b.height-64):b.y;
-            const right=g.mode.includes("e")?clamp(b.x+b.width+dx,b.x+64,720):b.x+b.width;
-            const bottom=g.mode.includes("s")?clamp(b.y+b.height+dy,b.y+64,480):b.y+b.height;
-            next={x:left,y:top,width:right-left,height:bottom-top};
-          }
-          g.latest=Object.fromEntries(Object.entries(next).map(([k,v])=>[k,Math.round(v)])) as Box; edit.setValue(g.latest);
+          updateGesture(e);
         }}
-        onPointerUp={e => { const g=gesture.current;if(!g||g.id!==e.pointerId)return;gesture.current=null;e.currentTarget.releasePointerCapture(e.pointerId);void edit.run("set_box",g.latest).catch(()=>{}); }}
-        onPointerCancel={cancel} onLostPointerCapture={cancel} />
+        onPointerUp={finishGesture}
+        onPointerCancel={cancel} onLostPointerCapture={finishGesture} />
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400"><span>Drag to move · Resize from corners · Esc to cancel</span><span className="font-mono">{Math.round(box.width)} × {Math.round(box.height)}</span></div>
       <div className="mt-5 grid grid-cols-4 gap-3">
-        {(["x","y","width","height"] as const).map(key=><label key={key}><span className="label">{({x:"X",y:"Y",width:"Width",height:"Height"})[key]}</span><input className="field" aria-label={`Box ${key}`} type="number" min={key==="x"||key==="y"?0:64} max={key==="x"||key==="width"?720:480} value={box[key]} disabled={edit.pending} onChange={e=>{if(!edit.active)edit.begin(snap,{...saved});edit.setValue({...box,[key]:Number(e.target.value)});}} /></label>)}
+        {(["x","y","width","height"] as const).map(key=><label key={key}><span className="label">{({x:"X",y:"Y",width:"Width",height:"Height"})[key]}</span><input className="field" aria-label={`Box ${key}`} type="number" min={key==="x"||key==="y"?0:64} max={key==="x"||key==="width"?720:480} value={box[key]} disabled={edit.pending || !!gesture.current} onChange={e=>{if(!edit.active)edit.begin(snap,{...saved});edit.setValue({...box,[key]:Number(e.target.value)});}} /></label>)}
       </div>
-      {edit.active && <EditActions edit={edit} snap={snap} name="set_box" args={v=>({...v})} current={JSON.stringify(saved)} />}
+      {edit.active && !gesture.current && !edit.pending && <EditActions edit={edit} snap={snap} name="set_box" args={v=>({...v})} current={JSON.stringify(saved)} />}
     </div>
   </section>;
 }

@@ -1,6 +1,6 @@
 {
   "name": "duet-mcp",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "type": "module",
   "scripts": {
     "build": "npm run build:package && npm run build:server && npm run build:web",
