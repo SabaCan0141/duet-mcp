@@ -1,27 +1,27 @@
 import { createRoot } from "react-dom/client";
-import { useDoc, useEdit } from "duet-mcp/react";
-import { defaultSettings, initialDoc, type Doc, type Settings } from "../doc";
+import { useEdit } from "duet-mcp/react";
+import { useDoc } from "../duet/browser";
+import type { Settings } from "../app";
 import { EditActions } from "./edit-actions";
 import { Canvas } from "./canvas";
 import "./style.css";
 
 function App() {
-  const snap = useDoc<Doc>();
+  const doc = useDoc();
   const edit = useEdit<Settings>();
   const textEdit = useEdit<string>();
-  if (!snap) return <main className="p-12 text-sm text-slate-500">Connecting to the studio…</main>;
-  // Provide defaults for text-only snapshots. Save new fields through their operations.
-  const saved = snap.doc.settings ?? defaultSettings();
+  if (!doc) return <main className="p-12 text-sm text-slate-500">Connecting to the studio…</main>;
+  const saved = doc.settings;
   const settings = edit.active ? edit.value! : saved;
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => {
-    if (!edit.active) edit.begin(snap, { ...saved });
+    if (!edit.active) edit.begin({ ...saved });
     edit.setValue({ ...settings, [key]: value });
   };
   return <div id="studio" className="min-h-screen">
     <header className="border-b border-slate-200/80 bg-white">
       <div className="mx-auto flex max-w-[1440px] items-center justify-between px-5 py-5 sm:px-10">
         <div className="flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-600 text-xl font-bold text-white">d.</span><span className="text-lg font-semibold tracking-tight">duet<span className="ml-3 border-l border-slate-200 pl-3 text-sm font-normal text-slate-400">playground</span></span></div>
-        <div className="flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs text-emerald-700"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500"/>Live<span className="hidden sm:inline"> · {snap.actor}</span></div>
+        <div className="flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs text-emerald-700"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500"/>Live<span className="hidden sm:inline"> · Shared</span></div>
       </div>
     </header>
     <main className="mx-auto max-w-[1440px] px-5 py-8 sm:px-10 sm:py-10">
@@ -36,13 +36,13 @@ function App() {
             <fieldset><legend className="label">Style</legend><div className="grid grid-cols-2 gap-2">{([['solid','Solid'],['outline','Outline']] as const).map(([v,label])=><label key={v} className={`flex cursor-pointer items-center gap-2 rounded-lg border p-3 text-xs ${settings.style===v?'border-violet-300 bg-violet-50 text-violet-700':'border-slate-200'}`}><input type="radio" name="style" value={v} checked={settings.style===v} onChange={()=>set("style",v)}/>{label}</label>)}</div></fieldset>
             <label className="block"><span className="label">Accent color</span><select className="field" value={settings.color} onChange={e=>set("color",e.target.value as Settings['color'])}><option value="violet">Violet</option><option value="blue">Blue</option><option value="coral">Coral</option></select></label>
             <label className="block"><span className="label flex justify-between">Opacity<span className="font-mono text-violet-600">{settings.opacity}%</span></span><input className="w-full" type="range" min={10} max={100} value={settings.opacity} onChange={e=>set("opacity",Number(e.target.value))}/></label>
-          </fieldset><EditActions edit={edit} snap={snap} name="set_settings" args={v=>({...v})} current={JSON.stringify(saved)}/></div>
+          </fieldset><EditActions edit={edit} submit={v=>doc.set_settings(v)} current={JSON.stringify(saved)}/></div>
         </section>
-        <div className="space-y-6"><Canvas snap={snap} settings={saved} box={snap.doc.box ?? initialDoc().box}/>
+        <div className="space-y-6"><Canvas doc={doc} settings={saved} box={doc.box}/>
           <section className="panel p-6" aria-label="Shared note"><div className="mb-4 flex items-center gap-2"><span className="text-violet-500">✦</span><h2 className="text-sm font-semibold">Shared note</h2></div><p className="mb-4 whitespace-pre-wrap text-sm text-slate-500">{saved.notes}</p>
-            <label htmlFor="text" className="label">Text</label><input id="text" className="field" placeholder="Leave a note for your collaborator…" disabled={textEdit.pending} value={textEdit.active?textEdit.value!:snap.doc.text} onChange={e=>{if(!textEdit.active)textEdit.begin(snap,snap.doc.text);textEdit.setValue(e.target.value);}} />
-            <EditActions edit={textEdit} snap={snap} name="set_text" args={text=>({text})} current={snap.doc.text}/>
-            <div id="shot" className="mt-4 whitespace-pre-wrap rounded-lg bg-slate-50 p-4 text-sm text-slate-600">{snap.doc.text || "No notes yet."}</div>
+            <label htmlFor="text" className="label">Text</label><input id="text" className="field" placeholder="Leave a note for your collaborator…" disabled={textEdit.pending} value={textEdit.active?textEdit.value!:doc.text} onChange={e=>{if(!textEdit.active)textEdit.begin(doc.text);textEdit.setValue(e.target.value);}} />
+            <EditActions edit={textEdit} submit={text=>doc.set_text({ text })} current={doc.text}/>
+            <div id="shot" className="mt-4 whitespace-pre-wrap rounded-lg bg-slate-50 p-4 text-sm text-slate-600">{doc.text || "No notes yet."}</div>
           </section>
         </div>
       </div>

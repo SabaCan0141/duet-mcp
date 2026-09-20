@@ -4,3 +4,5 @@ data/
 .DS_Store
 lib/
 *.tgz
+.duet/
+template/duet/

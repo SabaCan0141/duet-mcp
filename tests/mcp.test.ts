@@ -1,44 +1,35 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { registerTools } from "../duet/mcp.js";
-import { DocStore } from "../duet/doc.js";
+import { createMcpServer } from "../duet/mcp.js";
+import { Transport } from "../duet/transport.js";
 import { createHttpApp } from "../duet/http.js";
-import { app } from "../template/app.js";
+import { Engine } from "../duet/engine.js";
+import { defineApp, createAction } from "../duet/op.js";
+import { observerOps, awaitChange } from "../duet/assets.js";
+import { z } from "zod";
 
-test("MCP exposes string revisions and uses the same HTTP operation and snapshot", async(t)=>{
-  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"duet-mcp-test-"));
-  const store=new DocStore(app,dir);
-  const http=createHttpApp(app,()=>store);
-  const server=new McpServer({name:"test",version:"1"});
-  registerTools(server,app,async <T>(pathname:string,init?:RequestInit):Promise<T>=>{
-    const headers=new Headers(init?.headers);headers.set("x-duet-actor","llm");
-    return (await http.request(pathname,{...init,headers})).json() as Promise<T>;
-  });
-  const client=new Client({name:"test",version:"1"});
-  const [a,b]=InMemoryTransport.createLinkedPair();
-  t.after(async()=>{await client.close();await server.close();fs.rmSync(dir,{recursive:true,force:true});});
-  await server.connect(a);await client.connect(b);
-  const tools=await client.listTools();
-  const shape=tools.tools.find(t=>t.name==="set_text")!.inputSchema.properties!;
-  assert.equal((shape.baseRevision as {type:string}).type,"string");
-  const invoke=async(name:string,args:Record<string,unknown>={})=>{
-    const result=await client.callTool({name,arguments:args});
-    const content=result.content as {type:string;text:string}[];
-    return {result,payload:JSON.parse(content[0]!.text)};
-  };
-  const initial=(await invoke("await_change")).payload;
-  assert.equal(initial.actor,"llm");
-  const applied=(await invoke("set_text",{baseRevision:initial.revision,text:"new"})).payload;
-  assert.equal(applied.ok,true);assert.equal(applied.doc.text,"new");
-  const stale=(await invoke("set_text",{baseRevision:initial.revision,text:"old"})).payload;
-  assert.equal(stale.conflict,true);assert.equal(stale.doc.text,"new");
-  const old=await client.callTool({name:"set_text",arguments:{baseRevision:0,text:"invalid"}});
-  assert.equal(old.isError,true);
-  assert.equal(store.snapshot("human").doc.text,"new");
+const action = createAction<{n: number}>();
+
+test("MCP exposes only defined tools and translates scalar/transform input once",async()=>{
+  let transforms=0;
+  const app=defineApp({id:"mcp",version:"1",initialDoc:()=>({n:0}),actions: {
+    length:action({description:"",input:z.string().transform(s=>{transforms++;return s.length;}),handler:({doc},n)=>{doc.update(s=>{s.n=n;});return n;}}),
+    business:action({description:"",input:z.object({value:z.string()}),handler:(_ctx,arg)=>({ok:false,value:arg.value})}),
+   ...observerOps(),await_change:awaitChange()}});
+  const engine=await Engine.create(app,"http://localhost");const http=createHttpApp(app,{engine,url:engine.url,ready:true});
+  const transport=new Transport({url:engine.url,request:((url,init)=>http.request(String(url),init)) as typeof fetch});
+  const server=createMcpServer(app,transport);const client=new Client({name:"test",version:"1"});const [a,b]=InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(a),client.connect(b)]);
+  try {
+    const listed=await client.listTools();assert(!listed.tools.some(t=>t.name==="gui_url"));
+    const length=listed.tools.find(t=>t.name==="length")!;assert.equal((length.inputSchema.properties!.value as any).type,"string");assert(!("baseRevision" in length.inputSchema.properties!));
+    const call=async(name:string,args:Record<string,unknown>={})=>client.callTool({name,arguments:args});
+    const result=await call("length",{value:"hello"});assert.equal((result.content as any)[0].text,"5");assert.equal(transforms,1);
+    assert.equal((await call("length",{value:3})).isError,true);
+    assert.equal((await call("business",{value:"x"})).isError,undefined);
+    const id=JSON.parse(((await call("get_observer_id")).content as any)[0].text as string);
+    assert.deepEqual(JSON.parse(((await call("await_change",{oid:id})).content as any)[0].text as string),{n:5});
+  } finally {await client.close();await server.close();await engine.stop();}
 });

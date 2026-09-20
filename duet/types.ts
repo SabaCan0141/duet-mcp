@@ -1,69 +1,35 @@
 import type { z } from "zod";
-import type { Json } from "./diff.js";
-export type { Revision, Snapshot, RunResult } from "./protocol.js";
-
-export type { Json } from "./diff.js";
-
-export type ZodRawShape = z.ZodRawShape;
-
-/**
- * 誰が操作したか。ただの文字列。
- * ブラウザからは "human"、MCP からは env の DUET_ACTOR（既定 "llm"）。
- * MCP 設定に DUET_ACTOR=gpt と書けば別参加者になる。
- *
- * 「面」でも「役割」でもない。席の割り当てはアプリの doc に書くこと。
- */
-export type Actor = string;
-
-/**
- * op のハンドラが受け取るもの。これで全部。
- *
- * doc はそのまま書き換えてよい。これは複製なので、reject や例外で抜けた場合は
- * 途中まで書いた変更ごと捨てられる。commit / 永続化 / revision 採番は基盤が行う。
- */
-export type Ctx<Doc> = {
-  doc: Doc;
-  actor: Actor;
-  /**
-   * この操作は適用しない、と宣言して中断する。revision は進まない。
-   * 非合法な入力、状態的に許されない要求、手番違反はすべてこれ（例外ではなく正常な結果）。
-   * `return reject(...)` の形で呼ぶこと。
-   */
-  reject: (reason: string) => never;
+import type { ObserverStore } from "./observers.js";
+export type { Json } from "./json.js";
+export type ReadonlyDeep<T> = T extends object ? { readonly [K in keyof T]: ReadonlyDeep<T[K]> } : T;
+export type DocAccess<D> = {
+  get(): ReadonlyDeep<D>;
+  update<R>(change: (draft: D) => R & (R extends PromiseLike<unknown> ? never : unknown)): void;
 };
-
-/**
- * 操作の唯一の定義。ここから MCP ツールと HTTP ルートの両方が生える。
- *
- * handler をメソッド構文で宣言しているのは、具体的な Shape を持つ Op を
- * Op<Doc, ZodRawShape>[] に代入できるようにするため（双変性）。
- */
-export type Op<Doc, Shape extends ZodRawShape = ZodRawShape> = {
-  name: string;
-  description: string;
-  /** baseRevision は基盤が必須項目として足す。 */
-  input: Shape;
-  /** 同期で doc と結果だけを計算する。外部副作用・Promise は扱わない。 */
-  handler(ctx: Ctx<Doc>, args: z.infer<z.ZodObject<Shape>>): Json | void;
+export type Context<D> = {
+  doc: DocAccess<D>; observers: Pick<ObserverStore, "getObserverID" | "dispose" | "observe" | "isCurrent" | "waitChange">; signal: AbortSignal; actor: string;
+  url: string; snapshot(): import("./protocol.js").Snapshot<D>;
 };
-
-export type AppDef<Doc> = {
-  /** ポートとデータファイル名の元になる。プロセス間の正体確認にも使う。 */
-  id: string;
-  version: string;
-  initialDoc: () => Doc;
-  ops: Op<Doc>[];
-  /** アプリのルートの絶対パス。省略時は起動時の作業ディレクトリ。保存先はこの下の data/。 */
-  rootDir?: string;
-  /** GUI の出力先。rootDir からの相対パス、または絶対パス。 */
-  webDist: string;
-  /**
-   * スクリーンショットの撮り方。省略するとビューポート全体を等倍で撮る。
-   * 絵は GUI をそのまま撮るので、LLM 用に別途描画するものは無い。
-   */
-  shot?: {
-    /** 撮る要素の CSS セレクタ。省略するとページ全体。 */
-    selector?: string;
-    viewport?: { w: number; h: number };
-  };
+export type Action<D = any, S extends z.ZodTypeAny | undefined = any, R = any> = {
+  description: string; input?: S;
+  handler: (ctx: Context<D>, input: S extends z.ZodTypeAny ? z.output<S> : undefined) => R;
+  /** Optional MCP presentation adapter, used by media assets. */
+  content?: (result: Awaited<R>) => any[];
 };
+export type ActionBuilder<D> = {
+  <S extends z.ZodTypeAny, R>(action: { description: string; input: S; handler: (ctx: Context<D>, input: z.output<S>) => R }): Action<D, S, R>;
+  <R>(action: { description: string; input?: undefined; handler: (ctx: Context<D>) => R }): Action<D, undefined, R>;
+};
+export type ActionMap = Record<string, Action>;
+export type AppDef<D = any, O extends ActionMap = ActionMap> = {
+  id: string; version: string; port?: number; rootDir?: string; webDist?: string;
+  initialDoc: () => D | Promise<D>; actions: O;
+  setup?: (ctx: Context<D>) => void | (() => void | Promise<void>) | Promise<void | (() => void | Promise<void>)>;
+};
+export type AppDoc<A> = A extends AppDef<infer D, any> ? D : never;
+export type Methods<O, D> = { [K in keyof O]: O[K] extends { readonly returnsDoc: true }
+  ? (input: { oid: string; timeoutMs?: number }) => Promise<ReadonlyDeep<D>>
+  : O[K] extends Action<any, infer S, infer R>
+    ? S extends z.ZodTypeAny ? (input: z.input<S>) => Promise<Awaited<R>> : () => Promise<Awaited<R>>
+    : never };
+export type ClientDoc<A extends AppDef> = ReadonlyDeep<AppDoc<A>> & Methods<A["actions"], AppDoc<A>>;

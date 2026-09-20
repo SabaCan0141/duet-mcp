@@ -1,3 +1,3 @@
 export { runApp } from "./boot.js";
-export type { RunOptions } from "./boot.js";
-export { DocStore } from "./doc.js";
+export { startRuntime, Runtime } from "./runtime.js";
+export { createClient } from "./node-client.js";

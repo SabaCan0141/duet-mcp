@@ -13,6 +13,7 @@ const EXT: Record<string, string> = {
   "image/webp": ".webp",
   "image/svg+xml": ".svg",
   "application/json": ".json",
+  "application/zip": ".zip",
   "text/plain": ".txt",
 };
 
@@ -42,7 +43,10 @@ export class BlobStore {
     const mime = rawMime.split(";")[0]!.trim();
     fs.mkdirSync(this.dir, { recursive: true });
     const id = `${crypto.randomUUID()}${EXT[mime] ?? ".bin"}`;
-    fs.writeFileSync(path.join(this.dir, id), bytes);
+    const file = path.join(this.dir, id);
+    fs.writeFileSync(file, bytes);
+    try { fs.writeFileSync(`${file}.meta.json`, JSON.stringify({ mime })); }
+    catch (error) { fs.unlinkSync(file); throw error; }
     return { id, mime, size: bytes.byteLength };
   }
 
@@ -51,15 +55,26 @@ export class BlobStore {
     if (!file) return null;
     return {
       bytes: fs.readFileSync(file),
-      mime: MIME[path.extname(file)] ?? "application/octet-stream",
+      mime: this.mime(file),
     };
+  }
+
+  private mime(file: string): string {
+    const metadata = `${file}.meta.json`;
+    if (fs.existsSync(metadata)) {
+      const value = JSON.parse(fs.readFileSync(metadata, "utf8")) as { mime?: unknown };
+      if (typeof value.mime !== "string") throw new Error(`Invalid blob metadata: ${path.basename(file)}`);
+      return value.mime;
+    }
+    // Existing blobs without metadata retain their extension-based MIME type.
+    return MIME[path.extname(file)] ?? "application/octet-stream";
   }
 
   list(): BlobMeta[] {
     if (!fs.existsSync(this.dir)) return [];
-    return fs.readdirSync(this.dir).map((id) => ({
+    return fs.readdirSync(this.dir).filter(id => /^[0-9a-f-]{36}\.[a-z0-9+]{2,5}$/.test(id)).map(id => ({
       id,
-      mime: MIME[path.extname(id)] ?? "application/octet-stream",
+      mime: this.mime(path.join(this.dir, id)),
       size: fs.statSync(path.join(this.dir, id)).size,
     }));
   }

@@ -1,168 +1,64 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Hono, type Context } from "hono";
-import { BlobStore } from "./blob.js";
-import type { DocStore } from "./doc.js";
-import { rootFor, dataDirFor } from "./paths.js";
-import { takeShot } from "./shot.js";
-import type { Actor, AppDef } from "./types.js";
-import { baseUrlFor, MAX_WAIT_MS, MIN_WAIT_MS, portFor, WAIT_MS } from "./wire.js";
-
-const MIME: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".map": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".avif": "image/avif",
-  ".gif": "image/gif",
-  ".ico": "image/x-icon",
-  ".woff2": "font/woff2",
-  ".woff": "font/woff",
-  ".ttf": "font/ttf",
-  ".wasm": "application/wasm",
-};
-
-function serveFile(root: string, filePath: string): Response | null {
-  const rel = path.relative(root, filePath);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
-  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return null;
-  const type = MIME[path.extname(filePath)] ?? "application/octet-stream";
-  return new Response(new Uint8Array(fs.readFileSync(filePath)), {
-    headers: { "content-type": type },
-  });
-}
-
-const num = (v: string | undefined): number | undefined => {
-  if (v === undefined || v === "") return undefined;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : undefined;
-};
-
-const list = (v: string | undefined): string[] | undefined =>
-  v === undefined || v === "" ? undefined : v.split(",").filter(Boolean);
-
-// 下限を切らないと、timeoutMs: 0 が「即 timedOut で返り続ける」空回りになる。
-const clampTimeout = (v: number | undefined): number =>
-  Math.min(Math.max(v ?? WAIT_MS, MIN_WAIT_MS), MAX_WAIT_MS);
-
-/**
- * 呼び出し元の名前。ヘッダが無ければブラウザなので "human"。
- * MCP プロセスは env の DUET_ACTOR を送ってくる。
- */
-const actorOf = (c: Context): Actor => c.req.header("x-duet-actor") || "human";
-
-/**
- * DocStore に触れる唯一の実装。
- * ブラウザも、daemon 自身の MCP 層も、別プロセスの MCP 層も、全部ここを通る。
- * 経路が 1 本なので「daemon かどうかで挙動が変わらない」を維持する必要が無い。
- */
-export function createHttpApp<Doc>(app: AppDef<Doc>, getStore: () => DocStore<Doc>): Hono {
+import { Hono } from "hono";
+import type { Engine } from "./engine.js";
+import type { AppDef } from "./types.js";
+import { PROTOCOL } from "./protocol.js";
+import { daemonChanged, DuetError, errorInfo } from "./errors.js";
+import { eventResponse } from "./sse.js";
+import { inputForm } from "./operations.js";
+import { rootFor } from "./paths.js";
+export type Host = { engine?: Engine; url: string; ready: boolean };
+export function createHttpApp(app: AppDef, host: Host): Hono {
   const http = new Hono();
-  // verify と実リクエストの間に別アプリへ入れ替わっても操作を渡さない。
-  http.use("/api/*", async (c, next) => {
-    const expected = c.req.header("x-duet-app-id");
-    if (expected !== undefined && expected !== app.id) return c.json({ error: "接続先は別の duet アプリ。" }, 409);
+  http.onError((error, c) => {
+    const info = errorInfo(error);
+    const status = info.code === "InvalidInput" ? 400 : info.code === "UnknownOperation" ? 404 : info.code === "NotReady" ? 503 : info.code === "OperationError" ? 500 : 409;
+    if (status === 500) console.error("[duet] operation failed", error);
+    return c.json({ ok: false as const, error: info, ownerId: host.engine?.ownerId }, status);
+  });
+  http.use("*", async (c, next) => {
+    if (c.req.header("x-duet-app-id") && c.req.header("x-duet-app-id") !== app.id) throw new DuetError("WrongApp");
+    if (c.req.header("x-duet-protocol") && c.req.header("x-duet-protocol") !== String(PROTOCOL)) throw new DuetError("ProtocolMismatch");
+    if (c.req.header("x-duet-version") && c.req.header("x-duet-version") !== app.version) throw new DuetError("VersionMismatch");
     await next();
   });
-  const blobs = new BlobStore(app.id, dataDirFor(app));
-
-  /** DocStore は最初のリクエストまで作られない（生成の遅延は boot.ts 側にある）。 */
-  const store = getStore;
-
-  // ---- 正体確認と居場所 ----
-  // ポートは app.id から導出されるので、人にも LLM にも見えない。
-  // 「どこで開いているか」を答えられる口を基盤が既定で持つ。
-  http.get("/api/hello", (c) =>
-    c.json({
-      id: app.id,
-      version: app.version,
-      port: portFor(app.id),
-      url: baseUrlFor(app.id),
-    }),
-  );
-
-  // ---- ドキュメント取得 / 待機 ----
-  // since を付けると変化があるまで返さない（ロングポーリング）。
-  // ブラウザの購読も MCP の await_change もこれ 1 本。
-  http.get("/api/doc", async (c) => {
-    const since = c.req.query("since");
-    return c.json(await store().wait(
-      since, list(c.req.query("until")), clampTimeout(num(c.req.query("timeout"))),
-      actorOf(c), c.req.raw.signal,
-    ));
+  http.get("/api/hello", c => c.json({ id: app.id, version: app.version, protocol: PROTOCOL, ownerId: host.engine?.ownerId ?? "", ready: host.ready, url: host.url }));
+  const engine = () => { if (!host.ready || !host.engine) throw new DuetError("NotReady"); return host.engine; };
+  http.use("/api/*", async (c, next) => {
+    const current = engine(); const expected = c.req.header("x-duet-owner");
+    if (expected && expected !== current.ownerId) throw daemonChanged();
+    await next();
   });
-
-  // snapshot と操作結果を DocStore が同時に確定する。
-  http.post("/api/op/:name", async (c) => {
-    const name = c.req.param("name");
-    if (!app.ops.some((o) => o.name === name)) return c.json({ error: `unknown op: ${name}` }, 404);
-    const args: unknown = await c.req.json().catch(() => ({}));
-    return c.json(store().run(name, args, actorOf(c)));
+  http.get("/api/manifest", c => c.json({ names: Object.keys(app.actions), inputs: Object.fromEntries(Object.entries(app.actions).map(([name, op]) => [name, inputForm(op)])), ownerId: engine().ownerId }));
+  http.get("/api/doc", c => c.json(engine().snapshot()));
+  http.get("/api/events", c => { const e = engine(); return eventResponse(wake => e.subscribe(wake), () => e.snapshot(), AbortSignal.any([c.req.raw.signal, e.controller.signal])); });
+  http.get("/internal/replica", c => { const e = engine(); return eventResponse(wake => e.subscribe(wake), () => e.checkpoint(), AbortSignal.any([c.req.raw.signal, e.controller.signal])); });
+  http.post("/api/op/:name", async c => {
+    if (!c.req.header("x-duet-owner")) throw new DuetError("MissingOwner", "x-duet-owner from /api/hello is required");
+    const e = engine(); const body = await c.req.json();
+    if (!body || typeof body !== "object" || Array.isArray(body)) throw new DuetError("InvalidInput");
+    const result = await e.run(c.req.param("name"), body.input, c.req.header("x-duet-actor") ?? "human", c.req.raw.signal);
+    return c.json({ ok: true as const, ...(result === undefined ? {} : { result }), ownerId: e.ownerId });
   });
-
-  // ---- 活動の申告 ----
-  // 「今この人が触っている」だけを記録する。revision も doc も動かさない。
-  // 打鍵ごとに来るので、応答に doc を載せない（載せると 1 打鍵ごとに全状態が往復する）。
-  http.post("/api/touch", (c) => {
-    store().touch(actorOf(c));
-    return c.json({ ok: true });
+  http.post("/api/observers", c => {
+    if (!c.req.header("x-duet-owner")) throw new DuetError("MissingOwner");
+    const e = engine(); return c.json({ ok: true as const, result: e.observers.getObserverID(), ownerId: e.ownerId });
   });
-
-  // ---- スクリーンショット（GUI をそのまま撮る）----
-  http.post("/api/shot", async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { path?: string };
-    try {
-      return c.json({ data: await takeShot(app, store().revision, body.path || "/") });
-    } catch (err) {
-      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
-    }
+  http.delete("/api/observers/:id", c => {
+    if (!c.req.header("x-duet-owner")) throw new DuetError("MissingOwner");
+    const e = engine(); e.observers.dispose(c.req.param("id")); return c.json({ ok: true as const, ownerId: e.ownerId });
   });
-
-  // ---- blob（画像などの実体）----
-  http.post("/api/blob", async (c) => {
-    const mime = c.req.header("content-type") ?? "application/octet-stream";
-    const bytes = new Uint8Array(await c.req.arrayBuffer());
-    if (bytes.byteLength === 0) return c.json({ error: "empty body" }, 400);
-    return c.json(blobs.put(bytes, mime));
+  http.all("/api/*", c => c.json({ ok: false as const, error: { code: "NotFound", message: "Unknown endpoint" } }, 404));
+  http.get("/*", c => {
+    if (!app.webDist) return c.text("No GUI configured", 404);
+    const root = path.resolve(rootFor(app), app.webDist);
+    const file = path.resolve(root, `.${new URL(c.req.url).pathname}`);
+    if (path.relative(root, file).startsWith("..")) return c.text("Not found", 404);
+    const actual = fs.existsSync(file) && fs.statSync(file).isFile() ? file : path.join(root, "index.html");
+    if (!fs.existsSync(actual)) return c.text("GUI not built", 404);
+    const mime: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2" };
+    return new Response(fs.readFileSync(actual), { headers: { "content-type": mime[path.extname(actual)] ?? "application/octet-stream" } });
   });
-
-  http.get("/api/blob", (c) => c.json(blobs.list()));
-
-  http.get("/blob/:id", (c) => {
-    const found = blobs.get(c.req.param("id"));
-    if (!found) return c.text("not found", 404);
-    return new Response(new Uint8Array(found.bytes), {
-      headers: {
-        "content-type": found.mime,
-        "cache-control": "public, max-age=31536000, immutable",
-      },
-    });
-  });
-
-  // ---- GUI（vite ビルド成果物）。実ファイルが無ければ index.html を返す ----
-  // /api の打ち間違いが GUI の HTML で返ると原因が分からなくなるので、先に落とす。
-  http.all("/api/*", (c) => c.json({ error: `unknown endpoint: ${c.req.path}` }, 404));
-
-  const webDist = path.resolve(rootFor(app), app.webDist);
-  http.get("/*", (c) => {
-    let rel: string;
-    try {
-      rel = decodeURIComponent(new URL(c.req.url).pathname).replace(/^\/+/, "");
-    } catch {
-      return c.text("bad path", 400);
-    }
-    const asFile = serveFile(webDist, path.resolve(webDist, rel));
-    if (asFile) return asFile;
-    const index = serveFile(webDist, path.join(webDist, "index.html"));
-    if (index) return index;
-    return c.text(`${app.webDist} not built. run: npm run build:web`, 404);
-  });
-
   return http;
 }

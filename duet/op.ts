@@ -1,25 +1,23 @@
-import { z } from "zod";
-import type { AppDef, Op, ZodRawShape } from "./types.js";
-
-/**
- * Doc を固定した op 定義ヘルパ。
- * `const op = opFactory<MyDoc>()` としてから op({...}) と書くと、
- * handler の ctx.doc と args に型が付く。
- */
-export function opFactory<Doc>() {
-  return <Shape extends ZodRawShape>(op: Op<Doc, Shape>): Op<Doc, Shape> => op;
+import type { AppDef, Action, ActionBuilder, ActionMap } from "./types.js";
+export function mergeActions<T extends ActionMap[]>(...maps: T): UnionToIntersection<T[number]> {
+  const out: ActionMap = Object.create(null);
+  for (const map of maps) for (const [name, op] of Object.entries(map)) {
+    if (Object.hasOwn(out, name)) throw new Error(`duplicate action: ${name}`);
+    if (name === "then") throw new Error("reserved name: then");
+    out[name] = op;
+  }
+  return out as UnionToIntersection<T[number]>;
+}
+type UnionToIntersection<U> = (U extends unknown ? (x: U) => void : never) extends (x: infer I) => void ? I : never;
+export function createAction<D extends object>(): ActionBuilder<D> {
+  return ((value: unknown) => value) as ActionBuilder<D>;
 }
 
-export function defineApp<Doc>(app: AppDef<Doc>): AppDef<Doc> {
-  return app;
-}
-
-/** 両方の入口に同じ観測識別子を要求する。 */
-export function inputShape<Doc>(op: Op<Doc>): ZodRawShape {
-  return {
-    ...op.input,
-    baseRevision: z.string().min(1).describe(
-      "意図を決めるために観測した revision をそのまま渡す。数値の旧形式は使えない。版が変われば実行前に conflict。",
-    ),
-  };
+export function defineApp<D extends object, O extends ActionMap>(definition: {
+  id: string; version: string; port?: number; rootDir?: string; webDist?: string;
+  initialDoc: () => D | Promise<D>;
+  actions: O & Record<string, Action<NoInfer<D>>> & { [K in Extract<keyof O, keyof NoInfer<D> | "then">]: never };
+  setup?: AppDef<NoInfer<D>>["setup"];
+}): AppDef<D, O> {
+  return { ...definition, actions: mergeActions(definition.actions) as O };
 }

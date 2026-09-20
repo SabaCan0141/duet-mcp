@@ -1,33 +1,29 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { z } from "zod";
-import { DocStore } from "../duet/doc.js";
+import { Engine } from "../duet/engine.js";
 import { createHttpApp } from "../duet/http.js";
-import type { AppDef } from "../duet/types.js";
+import { defineApp, createAction } from "../duet/op.js";
+import { z } from "zod";
+import { PROTOCOL } from "../duet/protocol.js";
 
-test("HTTP returns paired full snapshots and rejects old clients / wrong app identity", async(t)=>{
-  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"duet-http-"));
-  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
-  const app:AppDef<{text:string}>={id:"http-test",version:"1",webDist:dir,initialDoc:()=>({text:""}),ops:[{
-    name:"set",description:"",input:{text:z.string()},handler:({doc},{text})=>{doc.text=text;},
-  }]};
-  const store=new DocStore(app,dir);const http=createHttpApp(app,()=>store);
-  const initial=await (await http.request("/api/doc")).json();
-  assert.equal(typeof initial.revision,"string");
-  const post=(args:unknown,headers:Record<string,string>={})=>http.request("/api/op/set",{
-    method:"POST",headers:{"content-type":"application/json",...headers},body:JSON.stringify(args),
-  });
-  const applied=await(await post({text:"new",baseRevision:initial.revision})).json();
-  assert.equal(applied.ok,true);assert.equal(applied.doc.text,"new");
-  const conflict=await(await post({text:"old",baseRevision:initial.revision})).json();
-  assert.equal(conflict.conflict,true);assert.equal(conflict.doc.text,"new");
-  const numeric=await(await post({text:"bad",baseRevision:0})).json();
-  assert.match(numeric.rejected,/baseRevision/);
-  const wrong=await post({text:"bad",baseRevision:applied.revision},{"x-duet-app-id":"another"});
-  assert.equal(wrong.status,409);assert.equal(store.snapshot("human").doc.text,"new");
-  const malformed=await(await post(null)).json();assert.ok(malformed.rejected);
-  const old=await(await http.request('/api/doc?since=0')).json();assert.equal(old.truncated,true);
+const action = createAction<{n: number}>();
+
+test("HTTP results carry only the application result; owner mismatch never executes",async()=>{
+  const app=defineApp({id:"http",version:"1",initialDoc:()=>({n:0}),actions: {
+    add:action({description:"",input:z.number(),handler:({doc},n)=>{doc.update(s=>{s.n+=n;});return {ok:false,n:doc.get().n};}}),
+    read:action({description:"",handler:({doc})=>doc.get().n}),
+  }});
+  const engine=await Engine.create(app,"http://localhost");const host={engine,url:engine.url,ready:true};const http=createHttpApp(app,host);
+  const req=(name:string,body:unknown,owner:string=engine.ownerId)=>http.request(`/api/op/${name}`,{method:"POST",headers:{"content-type":"application/json","x-duet-owner":owner},body:JSON.stringify(body)});
+  assert.equal((await (await http.request("/api/hello")).json()).protocol,PROTOCOL);
+  const id=engine.observers.getObserverID();engine.observers.observe(id);
+  const result=await (await req("add",{input:2})).json();assert.deepEqual(result,{ok:true,result:{ok:false,n:2},ownerId:engine.ownerId});
+  assert.equal(engine.observers.isCurrent(id),false);
+  assert.equal((await req("add",{input:9},"old-owner")).status,409);assert.equal(engine.state.get().n,2);
+  assert.equal((await req("add",{input:"wrong"})).status,400);
+  const read=await (await req("read",{})).json();assert.equal(read.result,2);assert.equal(engine.observers.isCurrent(id),false);
+  assert.equal((await http.request("/api/doc",{headers:{"x-duet-app-id":"other"}})).status,409);
+  assert.equal((await http.request("/api/doc",{headers:{"x-duet-protocol":"6"}})).status,409);
+  assert.equal((await http.request("/api/shot",{method:"POST"})).status,404);
+  await engine.stop();
 });

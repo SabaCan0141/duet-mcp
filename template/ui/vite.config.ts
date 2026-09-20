@@ -2,13 +2,8 @@ import path from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { portFor } from "duet-mcp/wire";
-
-// Match the directory name to app.id when copying or renaming the template.
-const appId = path.basename(path.resolve(__dirname, ".."));
-
-// Use the same port derivation as the server.
-const target = `http://127.0.0.1:${portFor(appId)}`;
+import connection from "../duet/connection";
+const target = connection.url;
 
 export default defineConfig({
   root: __dirname,

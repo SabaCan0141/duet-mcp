@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { useEdit, type Observed } from "duet-mcp/react";
-import { CANVAS, type Box, type Doc, type Settings } from "../doc";
+import { useEdit, type ClientDoc } from "duet-mcp/react";
+import type { app, Box, Settings } from "../app";
 import { EditActions } from "./edit-actions";
+const CANVAS = { width: 720, height: 480 };
 const colors = { violet: "#7c3aed", blue: "#2563eb", coral: "#e76c55" };
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
-type Gesture = { id: number; x: number; y: number; box: Box; mode: string; latest: Box };
+type Gesture = { id: number; x: number; y: number; box: Box; mode: string };
 
-export function Canvas({ snap, settings, box: saved }: { snap: Observed<Doc>; settings: Settings; box: Box }) {
+export function Canvas({ doc, settings, box: saved }: { doc: ClientDoc<typeof app>; settings: Settings; box: Box }) {
   const edit = useEdit<Box>();
   const ref = useRef<HTMLCanvasElement>(null);
   const gesture = useRef<Gesture | null>(null);
@@ -65,7 +66,7 @@ export function Canvas({ snap, settings, box: saved }: { snap: Observed<Doc>; se
       const bottom=g.mode.includes("s")?clamp(b.y+b.height+dy,b.y+64,480):b.y+b.height;
       next={x:left,y:top,width:right-left,height:bottom-top};
     }
-    g.latest=Object.fromEntries(Object.entries(next).map(([k,v])=>[k,Math.round(v)])) as Box; edit.setValue(g.latest);
+    edit.setValue(Object.fromEntries(Object.entries(next).map(([k,v])=>[k,Math.round(v)])) as Box);
   };
   const finishGesture = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const g = gesture.current;
@@ -74,7 +75,7 @@ export function Canvas({ snap, settings, box: saved }: { snap: Observed<Doc>; se
     if (e.type === "pointerup") updateGesture(e);
     gesture.current = null;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
-    void edit.run("set_box", g.latest).catch(() => {});
+    void edit.submit(value => doc.set_box(value)).catch(() => {});
   };
   const cancel = () => { if (gesture.current) { gesture.current=null; edit.cancel(); } };
   return <section className="panel overflow-hidden">
@@ -86,7 +87,7 @@ export function Canvas({ snap, settings, box: saved }: { snap: Observed<Doc>; se
           if(e.button!==0 || !settings.visible || edit.active || gesture.current) return;
           const p=point(e), mode=hit(p); if(!mode) return;
           e.currentTarget.focus(); e.currentTarget.setPointerCapture(e.pointerId);
-          gesture.current={id:e.pointerId,...p,box:{...saved},mode,latest:{...saved}}; edit.begin(snap,{...saved});
+          gesture.current={id:e.pointerId,...p,box:{...saved},mode}; edit.begin({...saved});
         }}
         onPointerMove={e => {
           const p=point(e), g=gesture.current;
@@ -98,9 +99,9 @@ export function Canvas({ snap, settings, box: saved }: { snap: Observed<Doc>; se
         onPointerCancel={cancel} onLostPointerCapture={finishGesture} />
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400"><span>Drag to move · Resize from corners · Esc to cancel</span><span className="font-mono">{Math.round(box.width)} × {Math.round(box.height)}</span></div>
       <div className="mt-5 grid grid-cols-4 gap-3">
-        {(["x","y","width","height"] as const).map(key=><label key={key}><span className="label">{({x:"X",y:"Y",width:"Width",height:"Height"})[key]}</span><input className="field" aria-label={`Box ${key}`} type="number" min={key==="x"||key==="y"?0:64} max={key==="x"||key==="width"?720:480} value={box[key]} disabled={edit.pending || !!gesture.current} onChange={e=>{if(!edit.active)edit.begin(snap,{...saved});edit.setValue({...box,[key]:Number(e.target.value)});}} /></label>)}
+        {(["x","y","width","height"] as const).map(key=><label key={key}><span className="label">{({x:"X",y:"Y",width:"Width",height:"Height"})[key]}</span><input className="field" aria-label={`Box ${key}`} type="number" min={key==="x"||key==="y"?0:64} max={key==="x"||key==="width"?720:480} value={box[key]} disabled={edit.pending || !!gesture.current} onChange={e=>{if(!edit.active)edit.begin({...saved});edit.setValue({...box,[key]:Number(e.target.value)});}} /></label>)}
       </div>
-      {edit.active && !gesture.current && !edit.pending && <EditActions edit={edit} snap={snap} name="set_box" args={v=>({...v})} current={JSON.stringify(saved)} />}
+      {edit.active && !gesture.current && !edit.pending && <EditActions edit={edit} submit={v=>doc.set_box(v)} current={JSON.stringify(saved)} />}
     </div>
   </section>;
 }

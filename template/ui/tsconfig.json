@@ -10,6 +10,6 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  // Include UI files and shared document types; keep server modules out of this build.
-  "include": ["*.ts", "*.tsx", "../doc.ts"]
+  // UI imports app types only; server code is not included in the browser bundle.
+  "include": ["*.ts", "*.tsx"]
 }

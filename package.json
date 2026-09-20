@@ -1,24 +1,28 @@
 {
   "name": "duet-mcp",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "type": "module",
   "scripts": {
-    "build": "npm run build:package && npm run build:server && npm run build:web",
+    "build": "npm run build:package && npm run generate && npm run build:server && npm run build:web",
     "build:server": "tsc -p tsconfig.json",
     "build:web": "for c in */ui/vite.config.ts; do vite build --config \"$c\" || exit 1; done",
     "dev:web": "vite --config ${DUET_APP:-template}/ui/vite.config.ts",
     "start": "node dist/${DUET_APP:-template}/main.js",
-    "typecheck": "npm run build:package && tsc -p tsconfig.json --noEmit && for c in */ui/tsconfig.json; do tsc -p \"$c\" || exit 1; done",
+    "typecheck": "npm run build:package && npm run generate && tsc -p tsconfig.json --noEmit && tsc -p template/ui/tsconfig.json",
     "test": "npm run build && node --test dist/tests/*.test.js",
-    "build:package": "tsc -p tsconfig.package.json",
+    "build:package": "node -e \"require('fs').rmSync('lib', {recursive:true, force:true})\" && tsc -p tsconfig.package.json",
     "prepack": "npm run build:package",
-    "test:package": "node scripts/test-package.mjs"
+    "test:package": "node scripts/test-package.mjs",
+    "generate": "node lib/cli.js generate",
+    "dev": "npm run build:package && node lib/cli.js dev"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "hono": "^4.6.14",
-    "playwright": "^1.49.1"
+    "playwright": "^1.49.1",
+    "zod-to-json-schema": "^3.25.2",
+    "esbuild": "^0.25.12"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
@@ -31,7 +35,7 @@
     "vite": "^6.0.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "zod": "^3.23.8"
+    "zod": "^3.25.0"
   },
   "license": "MIT",
   "description": "A shared JSON document for humans through a GUI and LLMs through MCP.",
@@ -55,7 +59,10 @@
     "template/ui/*.json",
     "template/ui/*.html",
     "template/ui/*.css",
-    "doc/README.jp.md"
+    "doc/README.jp.md",
+    "doc/SEMANTICS.md",
+    "doc/SEMANTICS.jp.md",
+    "duet.config.ts"
   ],
   "types": "./lib/index.d.ts",
   "exports": {
@@ -74,6 +81,14 @@
     "./wire": {
       "types": "./lib/wire.d.ts",
       "import": "./lib/wire.js"
+    },
+    "./assets": {
+      "types": "./lib/assets.d.ts",
+      "import": "./lib/assets.js"
+    },
+    "./generate": {
+      "types": "./lib/generate.d.ts",
+      "import": "./lib/generate.js"
     }
   },
   "publishConfig": {
@@ -87,11 +102,14 @@
   ],
   "peerDependencies": {
     "react": "^18.3.1",
-    "zod": "^3.23.8"
+    "zod": "^3.25.0"
   },
   "peerDependenciesMeta": {
     "react": {
       "optional": true
     }
+  },
+  "bin": {
+    "duet": "./lib/cli.js"
   }
 }

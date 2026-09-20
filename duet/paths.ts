@@ -8,4 +8,3 @@ export function rootFor(app: Pick<AppDef<unknown>, "rootDir">): string {
   }
   return app.rootDir ?? process.cwd();
 }
-export const dataDirFor = (app: Pick<AppDef<unknown>, "rootDir">): string => path.join(rootFor(app), "data");

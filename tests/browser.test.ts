@@ -6,15 +6,15 @@ import path from "node:path";
 import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
 import { chromium } from "playwright";
-import { DocStore } from "../duet/doc.js";
+import { Engine } from "../duet/engine.js";
 import { createHttpApp } from "../duet/http.js";
 import { app } from "../template/app.js";
 
-test("browser preserves a draft through external edits and publishes the rendered revision", async(t)=>{
+test("browser preserves local drafts, applies typed operations, and publishes render metadata", async(t)=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),"duet-browser-"));
-  const store=new DocStore(app,dir);
-  const server=serve({fetch:createHttpApp(app,()=>store).fetch,port:0,hostname:"127.0.0.1"}) as Server;
-  t.after(async()=>{server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));fs.rmSync(dir,{recursive:true,force:true});});
+  const store=await Engine.create(app,"http://127.0.0.1");
+  const server=serve({fetch:createHttpApp(app,{engine:store,url:store.url,ready:true}).fetch,port:0,hostname:"127.0.0.1"}) as Server;
+  t.after(async()=>{await store.stop();server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));fs.rmSync(dir,{recursive:true,force:true});});
   const browser=await chromium.launch({headless:true});
   t.after(async()=>{await browser.close();});
   if (!server.listening) await new Promise<void>(r=>server.once("listening",r));
@@ -23,17 +23,13 @@ test("browser preserves a draft through external edits and publishes the rendere
   const errors:string[]=[];page.on("pageerror",e=>errors.push(e.message));
   await page.goto(`http://127.0.0.1:${port}`);
   await page.locator("#text").fill("human draft");
-  store.run("set_text",{baseRevision:store.revision,text:"llm update"},"llm");
+  await store.run("set_text",{text:"llm update"},"llm");
   await page.waitForFunction(()=>document.querySelector("#shot")?.textContent==="llm update");
   assert.equal(await page.locator("#text").inputValue(),"human draft");
   await page.getByRole("region",{name:"Shared note"}).getByRole("button",{name:"Apply",exact:true}).click();
-  await page.getByRole("alert").waitFor();
-  assert.equal(store.snapshot("human").doc.text,"llm update");
-  assert.equal(await page.locator("#text").inputValue(),"human draft");
-  await page.getByRole("button",{name:"Review and apply draft",exact:true}).click();
   await page.waitForFunction(()=>document.querySelector("#shot")?.textContent==="human draft");
-  assert.equal(store.snapshot("human").doc.text,"human draft");
-  assert.equal(await page.locator("html").getAttribute("data-duet-revision"),store.revision);
+  assert.equal(store.snapshot().doc.text,"human draft");
+  assert.equal(await page.locator("html").getAttribute("data-duet-revision"),store.state.revision);
   // Verify both DOM capture and the screenshot endpoint.
   const shot=await page.locator("#shot").screenshot();assert.ok(shot.byteLength>100);
   const previous=process.env.DUET_SHOT_ORIGIN;
@@ -43,9 +39,7 @@ test("browser preserves a draft through external edits and publishes the rendere
     const holder=globalThis as unknown as {__duetShot?:{browser:{close():Promise<void>}}};
     await holder.__duetShot?.browser.close();
   });
-  const rendered=await fetch(`http://127.0.0.1:${port}/api/shot`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"});
-  assert.equal(rendered.status,200);
-  const image=await rendered.json() as {data:string};
+  const image=await store.run("render_screenshot",{path:"/"}) as {data:string};
   assert.equal(Buffer.from(image.data,"base64").subarray(1,4).toString(),"PNG");
   const controls=page.getByRole("region",{name:"Design settings"});
   await controls.getByLabel("Heading",{exact:true}).fill("Shared canvas");
@@ -54,9 +48,9 @@ test("browser preserves a draft through external edits and publishes the rendere
   await controls.getByLabel("Dot grid",{exact:true}).uncheck();
   await controls.getByRole("button",{name:"Apply",exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[aria-label="Design settings"] [role="status"]')?.textContent==="Saved");
-  assert.equal(store.snapshot("human").doc.settings.caption,"Shared canvas");
-  assert.equal(store.snapshot("human").doc.settings.style,"outline");
-  assert.equal(store.snapshot("human").doc.settings.grid,false);
+  assert.equal(store.snapshot().doc.settings.caption,"Shared canvas");
+  assert.equal(store.snapshot().doc.settings.style,"outline");
+  assert.equal(store.snapshot().doc.settings.grid,false);
   const canvas=page.getByLabel("Canvas: move and resize the box");
   const drag=async(x:number,y:number,dx:number,dy:number,external=false)=>{
     const r=(await canvas.boundingBox())!;
@@ -65,23 +59,23 @@ test("browser preserves a draft through external edits and publishes the rendere
     await page.mouse.move(px+dx*r.width/720,py+dy*r.height/480,{steps:4});
     assert.equal(await canvas.locator("..").getByRole("button",{name:"Apply",exact:true}).count(),0);
     assert.equal(await canvas.locator("..").getByRole("button",{name:"Cancel",exact:true}).count(),0);
-    if(external)store.run("set_text",{baseRevision:store.revision,text:"during drag"},"llm");
+    if(external)await store.run("set_text",{text:"during drag"},"llm");
     await page.mouse.up();
   };
   await drag(300,200,40,20);
   await page.waitForFunction(()=>document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.value==="200");
   await page.waitForFunction(()=>!document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.disabled);
-  assert.equal(store.snapshot("human").doc.box.x,200);
+  assert.equal(store.snapshot().doc.box.x,200);
   for(const corner of ["se","nw","ne","sw"]) {
-    const b=store.snapshot("human").doc.box;
+    const b=store.snapshot().doc.box;
     await drag(corner.includes("w")?b.x:b.x+b.width,corner.includes("n")?b.y:b.y+b.height,corner.includes("w")?-10:10,corner.includes("n")?-10:10);
     await page.waitForFunction(()=>!document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.disabled);
-    assert.equal(store.snapshot("human").doc.box.width,b.width+10);
-    assert.equal(store.snapshot("human").doc.box.height,b.height+10);
+    assert.equal(store.snapshot().doc.box.width,b.width+10);
+    assert.equal(store.snapshot().doc.box.height,b.height+10);
   }
   // No assertion or deliberate pause between press, move, and release.
   for (let i=0;i<20;i++) {
-    const b=store.snapshot("human").doc.box;
+    const b=store.snapshot().doc.box;
     const r=(await canvas.boundingBox())!;
     const dx=i%2===0?15:-15;
     await page.mouse.move(r.x+(b.x+30)*r.width/720,r.y+(b.y+30)*r.height/480);
@@ -89,10 +83,10 @@ test("browser preserves a draft through external edits and publishes the rendere
     await page.mouse.move(r.x+(b.x+30+dx)*r.width/720,r.y+(b.y+30)*r.height/480);
     await page.mouse.up();
     await page.waitForFunction(()=>!document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.disabled);
-    assert.equal(store.snapshot("human").doc.box.x,b.x+dx,`quick drag ${i}`);
+    assert.equal(store.snapshot().doc.box.x,b.x+dx,`quick drag ${i}`);
   }
   for (const cancellation of ["escape","pointercancel"]) {
-    const original=store.snapshot("human");
+    const original=store.snapshot();
     await canvas.evaluate((element,{b,cancellation})=>{
       const r=element.getBoundingClientRect();
       const dispatch=(type:string,dx:number)=>element.dispatchEvent(new PointerEvent(type,{
@@ -106,10 +100,10 @@ test("browser preserves a draft through external edits and publishes the rendere
     },{b:original.doc.box,cancellation});
     await page.waitForFunction(()=>!document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.disabled);
     assert.equal(await page.getByLabel("Box x",{exact:true}).inputValue(),String(original.doc.box.x));
-    assert.equal(store.revision,original.revision);
+    assert.equal(store.state.revision,original.revision);
   }
   // Capture loss on release must not discard the last drag position.
-  const captureBefore=store.snapshot("human").doc.box;
+  const captureBefore=store.snapshot().doc.box;
   await canvas.evaluate((element,b)=>{
     const r=element.getBoundingClientRect();
     for(const [type,dx] of [["pointerdown",0],["pointermove",12],["lostpointercapture",12],["pointerup",12]] as const) {
@@ -121,9 +115,9 @@ test("browser preserves a draft through external edits and publishes the rendere
     }
   },captureBefore);
   await page.waitForFunction(()=>!document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.disabled);
-  assert.equal(store.snapshot("human").doc.box.x,captureBefore.x+12,"capture loss must commit, not roll back");
+  assert.equal(store.snapshot().doc.box.x,captureBefore.x+12,"capture loss must commit, not roll back");
   // A quick release can arrive at a new position without a final pointermove.
-  const quickBefore=store.snapshot("human").doc.box;
+  const quickBefore=store.snapshot().doc.box;
   await canvas.evaluate((element, b) => {
     const r=element.getBoundingClientRect();
     const event=(type:string,dx:number,dy:number)=>element.dispatchEvent(new PointerEvent(type,{
@@ -135,15 +129,12 @@ test("browser preserves a draft through external edits and publishes the rendere
   },quickBefore);
   await page.waitForFunction(x=>document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.value===String(x),quickBefore.x+15);
   await page.waitForFunction(()=>!document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.disabled);
-  assert.equal(store.snapshot("human").doc.box.x,quickBefore.x+15);
-  assert.equal(store.snapshot("human").doc.box.y,quickBefore.y+10);
-  const before=store.snapshot("human").doc.box;
+  assert.equal(store.snapshot().doc.box.x,quickBefore.x+15);
+  assert.equal(store.snapshot().doc.box.y,quickBefore.y+10);
+  const before=store.snapshot().doc.box;
   await drag(before.x+30,before.y+30,20,20,true);
-  await page.getByRole("alert").waitFor();
-  assert.deepEqual(store.snapshot("human").doc.box,before);
-  await page.getByRole("button",{name:"Review and apply draft",exact:true}).click();
-  await page.waitForFunction(()=>!document.querySelector('[role="alert"]'));
-  assert.equal(store.snapshot("human").doc.box.x,before.x+20);
+  await page.waitForFunction(()=>!document.querySelector<HTMLInputElement>('[aria-label="Box x"]')?.disabled);
+  assert.equal(store.snapshot().doc.box.x,before.x+20);
   const waitForCanvasSize = () => page.waitForFunction(() => {
     const canvas = document.querySelector("canvas")!;
     return Math.abs(canvas.width - (canvas.getBoundingClientRect().width - 2) * devicePixelRatio) < 2;

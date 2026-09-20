@@ -1,13 +1,3 @@
-/**
- * doc の構造差分。
- *
- * 変更検知（差分が空か）と変更説明（どこを触ったか）を、この 1 箇所から得る。
- * 文字列比較をやめたので、キーの並びが変わっただけで revision が進むことがない。
- *
- * パスは JSON Pointer（RFC 6901）。root は ""、以下は "/cards/3/title"。
- * 標準の書式なので、そのまま LLM への応答に載せて読ませられる。
- */
-
 /** doc に置ける値。開発者が明示したいときに使う（強制はしない）。 */
 export type Json = string | number | boolean | null | Json[] | { [k: string]: Json };
 
@@ -68,45 +58,5 @@ export function assertJson(value: unknown, path = "", seen = new Set<object>()):
   throw new Error(
     `doc の ${at(path)} が ${name}。JSON で表せる値（object / array / string / number / boolean / null）だけ置けること。`,
   );
-}
-
-/** union。before の並びを保ったまま、after で増えたキーを後ろに足す。 */
-function keysOf(a: Record<string, unknown>, b: Record<string, unknown>): string[] {
-  const out = Object.keys(a);
-  for (const k of Object.keys(b)) if (!Object.hasOwn(a, k)) out.push(k);
-  return out;
-}
-
-function walk(a: unknown, b: unknown, path: string, out: string[]): void {
-  if (a === b) return;
-
-  if (Array.isArray(a) && Array.isArray(b)) {
-    // 長さが違えば要素の対応が付かない。配列ごと触ったことにする。
-    // 変更説明では配列全体を指す。競合判定には使わない。
-    if (a.length !== b.length) {
-      out.push(path);
-      return;
-    }
-    for (let i = 0; i < a.length; i += 1) walk(a[i], b[i], path + seg(i), out);
-    return;
-  }
-
-  if (isPlain(a) && isPlain(b)) {
-    for (const k of keysOf(a, b)) walk(a[k], b[k], path + seg(k), out);
-    return;
-  }
-
-  // プリミティブ、型が変わった、片方が null。ここが葉になる。
-  out.push(path);
-}
-
-/**
- * before から after で変わった場所。空なら何も変わっていない。
- * 深い方から葉のパスだけを返す（"/cards/3/title" は返るが "/cards" は返らない）。
- */
-export function changes(before: unknown, after: unknown): string[] {
-  const out: string[] = [];
-  walk(before, after, "", out);
-  return out;
 }
 
