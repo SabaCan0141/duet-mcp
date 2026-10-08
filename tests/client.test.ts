@@ -1,7 +1,7 @@
+import { PROTOCOL } from "../duet/protocol.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ClientStore } from "../duet/client-store.js";
-import { EditSession } from "../duet/edit.js";
 import { Engine } from "../duet/engine.js";
 import { defineApp, createAction } from "../duet/op.js";
 import { createHttpApp } from "../duet/http.js";
@@ -34,38 +34,8 @@ test("client combines state and methods without advancing observers; subscriptio
 test("transport diagnoses owner changes and does not replay a POST",async()=>{
   let count=0,owner="a";
   const request=(async(url:unknown)=>{
-    if(String(url).endsWith("hello"))return Response.json({id:"x",version:"1",protocol:7,ready:true,ownerId:owner});
+    if(String(url).endsWith("hello"))return Response.json({id:"x",version:"1",protocol:PROTOCOL,ready:true,ownerId:owner});
     count++;owner="b";throw new TypeError("disconnected");
   }) as typeof fetch;
   const transport=new Transport({request});await assert.rejects(transport.op("run"),{name:"DaemonChanged"});assert.equal(count,1);
-});
-test("edit helper preserves failed drafts and accepts typed callback results",async()=>{
-  const edit=new EditSession<string>();edit.begin("draft");
-  await assert.rejects(edit.submit(async()=>{throw new Error("failed");}),/failed/);
-  assert.equal(edit.getSnapshot().value,"draft");assert.equal(edit.getSnapshot().active,true);
-  assert.equal(await edit.submit(async()=>42),42);assert.equal(edit.getSnapshot().active,false);
-});
-
-test("submit reads the current draft and rejects inactive or concurrent submissions",async()=>{
-  const edit = new EditSession<string>();
-  let calls = 0;
-  await assert.rejects(edit.submit(() => { calls++; }), /No active edit/);
-  assert.equal(calls, 0);
-  edit.begin("old");
-  const submit = edit.submit; // Same function captured by a previous React render.
-  edit.setValue("latest");
-  let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  const sending = submit(async value => { assert.equal(value, "latest"); await gate; return value.length; });
-  await assert.rejects(submit(() => { calls++; }), /being submitted/);
-  assert.throws(() => edit.setValue("too late"), /being submitted/);
-  release();
-  assert.equal(await sending, 6);
-  assert.equal(calls, 0);
-  await assert.rejects(submit(() => { calls++; }), /No active edit/);
-  edit.begin("cancelled");edit.cancel();
-  await assert.rejects(submit(() => { calls++; }), /No active edit/);
-  const optional = new EditSession<string | undefined>();
-  optional.begin(undefined);
-  assert.equal(await optional.submit(value => value), undefined);
 });

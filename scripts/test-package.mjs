@@ -29,7 +29,8 @@ try {
   assert(manifest.files.some(f=>f.path==='lib/client.d.ts'));
   assert(manifest.files.every(f=>/^(lib\/|template\/|README.md$|doc\/(README\.jp|SEMANTICS(?:\.jp)?)\.md$|LICENSE$|package.json$|duet.config.ts$)/.test(f.path)));
   assert(manifest.files.every(f=>!/(^|\/)(data|dist|node_modules|\.duet)\//.test(f.path)));
-  assert(!manifest.files.some(f=>f.path==='lib/doc.js'||f.path==='lib/diff.js'));
+  assert(!manifest.files.some(f=>f.path==='lib/doc.js'||f.path==='lib/diff.js'||f.path==='lib/edit.js'||f.path==='lib/edit.d.ts'));
+  assert(!(await fs.readFile(path.join(repo,'lib/client.d.ts'),'utf8')).includes('useEdit'));
   assert(manifest.files.some(f=>f.path==='doc/SEMANTICS.md'));
   const bootstrap=path.join(scratch,'cli');await fs.mkdir(bootstrap);
   const tarball=path.join(scratch,manifest.filename);
@@ -54,7 +55,7 @@ try {
   await command(['run','build']);await command(['run','typecheck']);
   const generated=await fs.readFile(path.join(consumer,'template/duet/browser.ts'),'utf8');assert(generated.includes('import type { app }'));
   const bundleDir=path.join(consumer,'template/ui/dist/assets');
-  for(const file of await fs.readdir(bundleDir)){if(file.endsWith('.js')){const text=await fs.readFile(path.join(bundleDir,file),'utf8');assert(!text.includes('node:crypto'));assert(!text.includes('Keep the box within the canvas bounds.'));}}
+  for(const file of await fs.readdir(bundleDir)){if(file.endsWith('.js')){const text=await fs.readFile(path.join(bundleDir,file),'utf8');assert(!text.includes('node:crypto'));assert(!text.includes('Replace the shared text.'));}}
   const reserve=net.createServer();await new Promise((r,j)=>{reserve.once('error',j);reserve.listen(0,'127.0.0.1',r);});const port=reserve.address().port;await new Promise(r=>reserve.close(r));
   const env=Object.fromEntries(Object.entries(process.env).filter(([,v])=>typeof v==='string'));delete env.DUET_SHOT_ORIGIN;
   const start=async()=>{client=new Client({name:'smoke',version:'1'});await client.connect(new StdioClientTransport({command:process.execPath,args:[path.join(consumer,'dist/template/main.js')],cwd:otherCwd,env:{...env,DUET_PORT:String(port)},stderr:'pipe'}));};
@@ -64,10 +65,10 @@ try {
   assert.equal((await json('await_change',{oid})).text,'');
   assert.deepEqual(await json('set_text',{text:'Installed package works'}),{text:'Installed package works'});
   assert.equal((await json('await_change',{oid})).text,'Installed package works');
-  const url=`http://127.0.0.1:${port}`;assert.equal((await json('gui_url')).url,url);
+  const url=`http://127.0.0.1:${port}`;assert.equal(await json('url'),url);
   browser=await chromium.launch({headless:true});const page=await browser.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto(url);await page.locator('#text').waitFor();assert.equal(await page.locator('#text').inputValue(),'Installed package works');
-  const region=page.getByRole('region',{name:'Shared note'});await region.locator('#text').fill('From installed React UI');await region.getByRole('button',{name:'Apply',exact:true}).click();
+  const region=page.getByRole('region',{name:'Text'});await region.locator('#text').fill('From installed React UI');await region.getByRole('button',{name:'Apply',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#shot')?.textContent==='From installed React UI');assert.equal((await json('await_change',{oid})).text,'From installed React UI');
   const blob=await json('put_blob',{data:Buffer.from('shared blob').toString('base64'),mime:'text/plain'});
   assert.equal(Buffer.from((await json('read_blob',{id:blob.id})).data,'base64').toString(),'shared blob');

@@ -16,6 +16,7 @@ test("MCP exposes only defined tools and translates scalar/transform input once"
   let transforms=0;
   const app=defineApp({id:"mcp",version:"1",initialDoc:()=>({n:0}),actions: {
     length:action({description:"",input:z.string().transform(s=>{transforms++;return s.length;}),handler:({doc},n)=>{doc.update(s=>{s.n=n;});return n;}}),
+    hidden:action({mcp:false,input:z.preprocess(value=>Number(value),z.number()),handler:({doc},n)=>{doc.update(s=>{s.n=n;});return n;}}),
     business:action({description:"",input:z.object({value:z.string()}),handler:(_ctx,arg)=>({ok:false,value:arg.value})}),
    ...observerOps(),await_change:awaitChange()}});
   const engine=await Engine.create(app,"http://localhost");const http=createHttpApp(app,{engine,url:engine.url,ready:true});
@@ -23,7 +24,14 @@ test("MCP exposes only defined tools and translates scalar/transform input once"
   const server=createMcpServer(app,transport);const client=new Client({name:"test",version:"1"});const [a,b]=InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(a),client.connect(b)]);
   try {
-    const listed=await client.listTools();assert(!listed.tools.some(t=>t.name==="gui_url"));
+    const manifest=await (await http.request("/api/manifest")).json(); assert(manifest.names.includes("hidden"));
+    const listed=await client.listTools(); assert(!listed.tools.some(t=>t.name==="hidden"));
+    assert.equal((await client.callTool({name:"hidden",arguments:{value:8}})).isError,true);
+    assert.equal(engine.state.get().n,0);
+    assert.equal(await transport.op("hidden","4"),4);
+    assert.equal(engine.state.get().n,4);
+    await assert.rejects(engine.run("hidden",NaN),/NaN/);
+assert(!listed.tools.some(t=>t.name==="gui_url"));
     const length=listed.tools.find(t=>t.name==="length")!;assert.equal((length.inputSchema.properties!.value as any).type,"string");assert(!("baseRevision" in length.inputSchema.properties!));
     const call=async(name:string,args:Record<string,unknown>={})=>client.callTool({name,arguments:args});
     const result=await call("length",{value:"hello"});assert.equal((result.content as any)[0].text,"5");assert.equal(transforms,1);

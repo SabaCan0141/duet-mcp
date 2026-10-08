@@ -1,3 +1,4 @@
+import { replicaSender } from "./replica.js";
 import fs from "node:fs";
 import path from "node:path";
 import { Hono } from "hono";
@@ -33,7 +34,7 @@ export function createHttpApp(app: AppDef, host: Host): Hono {
   http.get("/api/manifest", c => c.json({ names: Object.keys(app.actions), inputs: Object.fromEntries(Object.entries(app.actions).map(([name, op]) => [name, inputForm(op)])), ownerId: engine().ownerId }));
   http.get("/api/doc", c => c.json(engine().snapshot()));
   http.get("/api/events", c => { const e = engine(); return eventResponse(wake => e.subscribe(wake), () => e.snapshot(), AbortSignal.any([c.req.raw.signal, e.controller.signal])); });
-  http.get("/internal/replica", c => { const e = engine(); return eventResponse(wake => e.subscribe(wake), () => e.checkpoint(), AbortSignal.any([c.req.raw.signal, e.controller.signal])); });
+  http.get("/internal/replica", c => { const e = engine(); return eventResponse(wake => e.subscribe(wake), replicaSender(() => e.checkpoint()), AbortSignal.any([c.req.raw.signal, e.controller.signal])); });
   http.post("/api/op/:name", async c => {
     if (!c.req.header("x-duet-owner")) throw new DuetError("MissingOwner", "x-duet-owner from /api/hello is required");
     const e = engine(); const body = await c.req.json();

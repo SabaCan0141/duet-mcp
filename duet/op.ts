@@ -13,11 +13,15 @@ export function createAction<D extends object>(): ActionBuilder<D> {
   return ((value: unknown) => value) as ActionBuilder<D>;
 }
 
-export function defineApp<D extends object, O extends ActionMap>(definition: {
+// `const` keeps `mcp: false` literal in spread actions; widened to boolean, O would fall back to ActionMap and lose every action type.
+export function defineApp<D extends object, const O extends ActionMap>(definition: {
   id: string; version: string; port?: number; rootDir?: string; webDist?: string;
   initialDoc: () => D | Promise<D>;
   actions: O & Record<string, Action<NoInfer<D>>> & { [K in Extract<keyof O, keyof NoInfer<D> | "then">]: never };
   setup?: AppDef<NoInfer<D>>["setup"];
+  maxLen?: number;
+  onCommit?: AppDef<NoInfer<D>>["onCommit"];
+  onChange?: AppDef<NoInfer<D>>["onChange"];
 }): AppDef<D, O> {
   return { ...definition, actions: mergeActions(definition.actions) as O };
 }

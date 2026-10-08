@@ -1,3 +1,4 @@
+import { PROTOCOL } from "../duet/protocol.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -16,13 +17,14 @@ test("processes proactively take over a coherent checkpoint without rerunning in
   await writeFile(fixture,`
 import { startRuntime } from ${JSON.stringify(new URL("../duet/runtime.js",import.meta.url).href)};
 import { defineApp, createAction } from ${JSON.stringify(new URL("../duet/op.js",import.meta.url).href)};
+import { historyOps } from ${JSON.stringify(new URL("../duet/assets.js",import.meta.url).href)};
 import { Transport } from ${JSON.stringify(new URL("../duet/transport.js",import.meta.url).href)};
 import { createInterface } from "node:readline";
 import { appendFileSync } from "node:fs";
 const action=createAction();
-const app=defineApp({id:"handoff",version:"1",port:${port},initialDoc:()=>{appendFileSync(${JSON.stringify(path.join(dir,"init"))},"init\\n");return {n:0};},
+const app=defineApp({id:"handoff",version:"1",maxLen:3,port:${port},initialDoc:()=>{appendFileSync(${JSON.stringify(path.join(dir,"init"))},"init\\n");return {n:0};},
   setup:()=>{appendFileSync(${JSON.stringify(path.join(dir,"setup"))},"setup\\n");},
-  actions:{increment:action({description:"",handler:({doc})=>{doc.update(s=>{s.n++;});return doc.get().n;}}),
+  actions:{...historyOps(),increment:action({description:"",handler:({doc})=>{doc.update(s=>{s.n++;});return doc.get().n;}}),
   observe:action({description:"",handler:({observers})=>{const oid=observers.getObserverID();observers.observe(oid);return oid;}}),
   wait:action({description:"",handler:async({observers,signal})=>{const oid=observers.getObserverID();observers.observe(oid);await observers.waitChange(oid,20000,{signal});return true;}})}});
 const runtime=await startRuntime(app);const client=new Transport({url:runtime.url,id:app.id,version:app.version});
@@ -48,6 +50,8 @@ process.once("SIGTERM",()=>{void runtime.stop().finally(()=>process.exit());});
     const first=(await a.request("snapshot")).result;
     assert.equal((await b.request("snapshot")).result.ownerId,first.ownerId);
     assert.equal((await b.request("increment")).result,1);
+    assert.equal((await b.request("increment")).result,2);
+    assert.equal((await b.request("undo")).result,true);
     const oid=(await a.request("observe")).result;
     const wait=b.request("wait");
     const cp=await until(async()=> (await b.request("checkpoint")).result,v=>v.doc.n===1&&v.observers.length===2);
@@ -60,6 +64,10 @@ process.once("SIGTERM",()=>{void runtime.stop().finally(()=>process.exit());});
     const copy=(await b.request("checkpoint")).result;assert.equal(copy.observers.find((o:any)=>o.id===oid).revision,cp.revision);
     assert.equal((await readFile(path.join(dir,"init"),"utf8")).trim().split("\n").length,1);
     assert.equal((await readFile(path.join(dir,"setup"),"utf8")).trim().split("\n").length,2);
+    assert.deepEqual(copy.history,cp.history);
+    assert.equal((await b.request("redo")).result,true);
+    assert.equal((await b.request("snapshot")).result.doc.n,2);
+    assert.equal((await b.request("undo")).result,true);
     assert.equal((await b.request("increment")).result,2);
     assert.notEqual((await b.request("snapshot")).result.revision,cp.revision);
     for(const child of [b.child,c.child]){const exited=once(child,"exit");child.kill();await exited;}
@@ -87,7 +95,7 @@ test("a joining process cannot promote before receiving its first checkpoint",{t
   const port=await freePort();let connected!:()=>void;
   const connection=new Promise<void>(r=>connected=r);
   const server=createServer((req,res)=>{
-    if(req.url==="/api/hello") {res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({id:"empty-replica",version:"1",protocol:7,ready:true,ownerId:"old"}));}
+    if(req.url==="/api/hello") {res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({id:"empty-replica",version:"1",protocol:PROTOCOL,ready:true,ownerId:"old"}));}
     else {res.writeHead(200,{"content-type":"text/event-stream"});res.write(": no checkpoint yet\n\n");connected();}
   });
   server.listen(port,"127.0.0.1");await once(server,"listening");

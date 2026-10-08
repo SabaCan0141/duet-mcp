@@ -26,10 +26,13 @@ function checkSchema(schema: z.ZodTypeAny, name: string): void {
 }
 export function validateOps(app: AppDef): void {
   if (typeof app.id !== "string" || !app.id || typeof app.version !== "string" || !app.version) throw new Error("app.id and app.version must be non-empty strings");
+  if (app.maxLen !== undefined && (!Number.isSafeInteger(app.maxLen) || app.maxLen < 1)) throw new DuetError("InvalidMaxLen", "maxLen must be a positive safe integer");
   for (const [name, op] of Object.entries(app.actions)) {
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(name) || name === "then") throw new Error(`invalid op name: ${name}`);
-    if (op.input) checkSchema(op.input, name);
-    toolSchema(op);
+    if (op.mcp !== false) {
+      if (op.input) checkSchema(op.input, name);
+      toolSchema(op);
+    }
   }
 }
 export async function dispatch(app: AppDef, ctx: Context<any>, name: string, input: unknown): Promise<unknown> {

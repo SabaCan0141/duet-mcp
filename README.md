@@ -25,7 +25,7 @@ Read **`template/app.ts`** for shared state and operations, then **`template/ui/
 
 ```ts
 import { defineApp, createAction } from "duet-mcp";
-import { guiUrl, awaitChange, observerOps } from "duet-mcp/assets";
+import { appInfo, awaitChange, observerOps } from "duet-mcp/assets";
 import { z } from "zod";
 
 type Doc = { text: string };
@@ -44,7 +44,7 @@ export const app = defineApp({
         return { text };
       },
     }),
-    gui_url: guiUrl(),
+    url: appInfo().url,
     await_change: awaitChange(),
     ...observerOps(),
   },
@@ -55,11 +55,11 @@ The handler's document, input, and result are typed. Custom actions and built-in
 
 In the GUI, import `useDoc` from `../duet/browser`, call `const doc = useDoc()`, and handle the initial `null`. Then call **`await doc.set_text({ text: "hello" })`**. A Node caller imports `getDoc` from `./duet/node` and calls `await getDoc()` first. MCP takes the same `{ text: "hello" }` input.
 
-For local drafts, import `useEdit` from `duet-mcp/react`: begin an edit with `edit.begin(doc.text)`, then submit with `edit.submit(text => doc.set_text({ text }))`. The callback receives the current draft.
+Keep drafts in React `useState` / `useRef`. Clear a draft only after its action succeeds; use the value calculated in the release handler when submitting a drag.
 
 ## Connect an MCP client
 
-Run `npm run build`, then configure your MCP client to launch `node` with the absolute path to `dist/template/main.js`. The template provides GUI URL, observation, screenshot, and blob actions. For screenshots, install Chromium with `npx playwright install chromium`.
+Run `npm run build`, then configure your MCP client to launch `node` with the absolute path to `dist/template/main.js`. The template provides GUI URL, observation, screenshot, blob, and undo/redo actions. For screenshots, install Chromium with `npx playwright install chromium`.
 
 Use `npm run typecheck` to check your app. Generated `template/duet/browser.ts`, `node.ts`, and `connection.ts` need no manual editing.
 

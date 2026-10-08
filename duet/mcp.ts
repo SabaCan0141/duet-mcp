@@ -6,12 +6,12 @@ import type { AppDef } from "./types.js";
 import type { Transport } from "./transport.js";
 export function createMcpServer(app: AppDef, transport: Transport): Server {
   const server = new Server({ name: app.id, version: app.version }, { capabilities: { tools: {} } });
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: Object.entries(app.actions).map(([name, op]) => ({ name, description: op.description, inputSchema: toolSchema(op) as any })) }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: Object.entries(app.actions).filter(([, op]) => op.mcp !== false).map(([name, op]) => ({ name, description: op.description, inputSchema: toolSchema(op) as any })) }));
   server.setRequestHandler(CallToolRequestSchema, async request => {
     try {
       const name = request.params.name;
       const op = Object.hasOwn(app.actions, name) ? app.actions[name] : undefined;
-      if (!op) throw new Error(`unknown op: ${name}`);
+      if (!op || op.mcp === false) throw new Error(`unknown op: ${name}`);
       const args = request.params.arguments ?? {};
       const form = inputForm(op);
       const result = await transport.op(name, form === "none" ? undefined : form === "object" ? args : args.value);

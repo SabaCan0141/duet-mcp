@@ -4,7 +4,7 @@ import { ObserverStore } from "./observers.js";
 import { dispatch, validateOps } from "./operations.js";
 import { PROTOCOL, type Snapshot, type Checkpoint } from "./protocol.js";
 import { daemonChanged, DuetError } from "./errors.js";
-import type { AppDef, Context } from "./types.js";
+import type { AppDef, Context, ReadonlyDeep } from "./types.js";
 export class Engine<D = any> {
   readonly ownerId = randomUUID();
   readonly state: State<D>;
@@ -20,7 +20,17 @@ export class Engine<D = any> {
     const names = Object.keys(app.actions);
     this.state = new State(initial, value => {
       for (const name of names) if (Object.hasOwn(value as object, name)) throw new DuetError("NameCollision", `state key conflicts with operation: ${name}`);
-    }, checkpoint);
+    }, checkpoint, app.maxLen ?? 1, app.onCommit || app.onChange ? (entry, committed) => {
+      queueMicrotask(() => {
+        const invoke = (callback: AppDef<D>["onChange"]) => {
+          if (!callback) return;
+          try { void Promise.resolve(callback({ revision: entry.revision, doc: structuredClone(entry.doc) as ReadonlyDeep<D> }, this.controller.signal)).catch(error => console.error(error)); }
+          catch (error) { console.error(error); }
+        };
+        if (committed) invoke(app.onCommit);
+        invoke(app.onChange);
+      });
+    } : undefined);
     this.checkpointSeq = checkpoint?.checkpointSeq ?? 0;
     this.state.subscribe(() => this.changed());
     this.observers = new ObserverStore(this.state, () => this.changed(), checkpoint?.observers);
@@ -54,9 +64,9 @@ export class Engine<D = any> {
   }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   snapshot(): Snapshot<D> { return { ownerId: this.ownerId, revision: this.state.revision, seq: this.state.seq, doc: this.state.get() as D }; }
-  checkpoint(): Checkpoint<D> { return { ...this.snapshot(), protocol: PROTOCOL, appId: this.app.id, appVersion: this.app.version, checkpointSeq: this.checkpointSeq, observers: this.observers.export() }; }
+  checkpoint(): Checkpoint<D> { return { ...this.snapshot(), protocol: PROTOCOL, appId: this.app.id, appVersion: this.app.version, checkpointSeq: this.checkpointSeq, observers: this.observers.export(), history: this.state.exportHistory() }; }
   context(actor = "system", signal?: AbortSignal): Context<D> {
-    return { doc: this.state, observers: this.observers, signal: signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal, actor, url: this.url, snapshot: () => this.snapshot() };
+    return { doc: this.state, observers: this.observers, signal: signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal, actor, url: this.url, app: { id: this.app.id, version: this.app.version }, snapshot: () => this.snapshot() };
   }
   run(name: string, input?: unknown, actor?: string, signal?: AbortSignal): Promise<unknown> { return dispatch(this.app, this.context(actor, signal), name, input); }
   stop(): Promise<void> {

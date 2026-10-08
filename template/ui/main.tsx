@@ -1,53 +1,175 @@
 import { createRoot } from "react-dom/client";
-import { useEdit } from "duet-mcp/react";
+import { useEffect, useRef, useState } from "react";
+import type { ClientDoc } from "duet-mcp/react";
 import { useDoc } from "../duet/browser";
-import type { Settings } from "../app";
-import { EditActions } from "./edit-actions";
-import { Canvas } from "./canvas";
+import type { app, Doc } from "../app";
 import "./style.css";
 
+type Shared = ClientDoc<typeof app>;
+type Box = Doc["box"];
+
 function App() {
+  // The shared state plus its actions. null until the first snapshot arrives.
   const doc = useDoc();
-  const edit = useEdit<Settings>();
-  const textEdit = useEdit<string>();
-  if (!doc) return <main className="p-12 text-sm text-slate-500">Connecting to the studio…</main>;
-  const saved = doc.settings;
-  const settings = edit.active ? edit.value! : saved;
-  const set = <K extends keyof Settings>(key: K, value: Settings[K]) => {
-    if (!edit.active) edit.begin({ ...saved });
-    edit.setValue({ ...settings, [key]: value });
-  };
-  return <div id="studio" className="min-h-screen">
-    <header className="border-b border-slate-200/80 bg-white">
-      <div className="mx-auto flex max-w-[1440px] items-center justify-between px-5 py-5 sm:px-10">
-        <div className="flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-600 text-xl font-bold text-white">d.</span><span className="text-lg font-semibold tracking-tight">duet<span className="ml-3 border-l border-slate-200 pl-3 text-sm font-normal text-slate-400">playground</span></span></div>
-        <div className="flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs text-emerald-700"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500"/>Live<span className="hidden sm:inline"> · Shared</span></div>
-      </div>
-    </header>
-    <main className="mx-auto max-w-[1440px] px-5 py-8 sm:px-10 sm:py-10">
-      <div className="mb-8 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-[10px] font-bold tracking-[.2em] text-violet-600">YOUR SHARED CREATIVE SPACE</p><h1 className="text-3xl font-semibold tracking-tight">A little space for big ideas.</h1><p className="mt-3 text-sm text-slate-500">Tweak the controls. Move things around. One studio for you and AI.</p></div><span className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-500">Studio / 01</span></div>
-      <div className="grid items-start gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
-        <section className="panel" aria-label="Design settings">
-          <div className="border-b border-slate-100 px-6 py-4"><h2 className="text-sm font-semibold">Design controls</h2><p className="mt-1 text-xs text-slate-400">Apply your settings to update the canvas.</p></div>
-          <div className="space-y-5 p-6"><fieldset disabled={edit.pending} className="space-y-5">
-            <label className="block"><span className="label">Heading</span><input className="field" maxLength={80} value={settings.caption} onChange={e=>set("caption",e.target.value)} /></label>
-            <label className="block"><span className="label">Notes</span><textarea className="field min-h-20 resize-y" maxLength={500} value={settings.notes} onChange={e=>set("notes",e.target.value)} /></label>
-            <div className="border-t border-slate-100 pt-5"><span className="label">Display options</span><div className="space-y-3 text-sm"><label className="flex items-center gap-2.5"><input type="checkbox" className="h-4 w-4" checked={settings.visible} onChange={e=>set("visible",e.target.checked)} />Show box</label><label className="flex items-center gap-2.5"><input type="checkbox" className="h-4 w-4" checked={settings.grid} onChange={e=>set("grid",e.target.checked)} />Dot grid</label></div></div>
-            <fieldset><legend className="label">Style</legend><div className="grid grid-cols-2 gap-2">{([['solid','Solid'],['outline','Outline']] as const).map(([v,label])=><label key={v} className={`flex cursor-pointer items-center gap-2 rounded-lg border p-3 text-xs ${settings.style===v?'border-violet-300 bg-violet-50 text-violet-700':'border-slate-200'}`}><input type="radio" name="style" value={v} checked={settings.style===v} onChange={()=>set("style",v)}/>{label}</label>)}</div></fieldset>
-            <label className="block"><span className="label">Accent color</span><select className="field" value={settings.color} onChange={e=>set("color",e.target.value as Settings['color'])}><option value="violet">Violet</option><option value="blue">Blue</option><option value="coral">Coral</option></select></label>
-            <label className="block"><span className="label flex justify-between">Opacity<span className="font-mono text-violet-600">{settings.opacity}%</span></span><input className="w-full" type="range" min={10} max={100} value={settings.opacity} onChange={e=>set("opacity",Number(e.target.value))}/></label>
-          </fieldset><EditActions edit={edit} submit={v=>doc.set_settings(v)} current={JSON.stringify(saved)}/></div>
-        </section>
-        <div className="space-y-6"><Canvas doc={doc} settings={saved} box={doc.box}/>
-          <section className="panel p-6" aria-label="Shared note"><div className="mb-4 flex items-center gap-2"><span className="text-violet-500">✦</span><h2 className="text-sm font-semibold">Shared note</h2></div><p className="mb-4 whitespace-pre-wrap text-sm text-slate-500">{saved.notes}</p>
-            <label htmlFor="text" className="label">Text</label><input id="text" className="field" placeholder="Leave a note for your collaborator…" disabled={textEdit.pending} value={textEdit.active?textEdit.value!:doc.text} onChange={e=>{if(!textEdit.active)textEdit.begin(doc.text);textEdit.setValue(e.target.value);}} />
-            <EditActions edit={textEdit} submit={text=>doc.set_text({ text })} current={doc.text}/>
-            <div id="shot" className="mt-4 whitespace-pre-wrap rounded-lg bg-slate-50 p-4 text-sm text-slate-600">{doc.text || "No notes yet."}</div>
-          </section>
-        </div>
-      </div>
-      <footer className="mt-8 flex flex-wrap justify-between gap-2 text-[11px] text-slate-400"><span>Made for two. Built with duet.</span><span>Changes are shared with everyone in this studio.</span></footer>
+  if (!doc) return <p className="connecting">Connecting…</p>;
+  return (
+    <main id="app" className="page">
+      <header>
+        <h1 className="title">duet template<Version doc={doc} /></h1>
+        <p className="lead">Use this page, or let an LLM call the same actions over MCP. Both edit one shared doc.</p>
+      </header>
+      <TextEditor doc={doc} />
+      <BoxBoard doc={doc} />
+      <History doc={doc} />
     </main>
-  </div>;
+  );
 }
+
+// The app version, read once through the GUI-only `version` action.
+// Every runtime sharing the port runs the same version, so it never changes while the page is open.
+function Version({ doc }: { doc: Shared }) {
+  const [version, setVersion] = useState("");
+  useEffect(() => { doc.version().then(setVersion, () => {}); }, []);
+  return version ? <span className="version">v{version}</span> : null;
+}
+
+// Example 1: edit a local draft, then send it with Apply.
+function TextEditor({ doc }: { doc: Shared }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const sending = useRef(false); // Blocks a second click before React re-renders.
+
+  const apply = async () => {
+    if (draft === null || sending.current) return;
+    sending.current = true;
+    setPending(true);
+    setError("");
+    try {
+      await doc.set_text({ text: draft });
+      setDraft(null);
+    } catch (error) {
+      setError(String(error)); // Keep the draft so nothing is lost.
+    } finally {
+      sending.current = false;
+      setPending(false);
+    }
+  };
+
+  return (
+    <section aria-label="Text" className="card">
+      <div className="card-head">
+        <h2 className="card-title">Text</h2>
+        <code className="action">set_text</code>
+      </div>
+      <div className="row">
+        <input id="text" className="input" value={draft ?? doc.text} disabled={pending}
+          onChange={(event) => setDraft(event.target.value)} />
+        <button className="btn btn-primary" onClick={apply} disabled={draft === null || pending}>Apply</button>
+        <button className="btn" onClick={() => setDraft(null)} disabled={draft === null || pending}>Cancel</button>
+      </div>
+      {error && <p role="alert" className="alert">{error}</p>}
+      <p className="shared"><span className="shared-label">Shared</span><span id="shot" className="shared-value">{doc.text}</span></p>
+    </section>
+  );
+}
+
+// Example 2: while dragging only the screen moves; the doc is updated once, on release.
+// The released position stays on screen until the doc shows it, so the box never jumps back.
+const BOARD = { width: 400, height: 240, box: 80 }; // Matches the limits of move_box.
+const clamp = (n: number, max: number) => Math.round(Math.min(max, Math.max(0, n)));
+
+function BoxBoard({ doc }: { doc: Shared }) {
+  const [dragged, setDragged] = useState<Box | null>(null); // Shown until the doc catches up.
+  const drag = useRef<{ x: number; y: number; from: Box } | null>(null);
+  const [error, setError] = useState("");
+  const box = dragged ?? doc.box;
+
+  // The update reaches useDoc() shortly after move_box is sent; switch back to the doc then.
+  useEffect(() => { if (!drag.current) setDragged(null); }, [doc.box.x, doc.box.y]);
+
+  // Position for the pointer, in board units (the board may be drawn smaller).
+  const positionAt = (event: React.PointerEvent<HTMLElement>): Box => {
+    const { x, y, from } = drag.current!;
+    const scale = event.currentTarget.parentElement!.clientWidth / BOARD.width;
+    return {
+      x: clamp(from.x + (event.clientX - x) / scale, BOARD.width - BOARD.box),
+      y: clamp(from.y + (event.clientY - y) / scale, BOARD.height - BOARD.box),
+    };
+  };
+
+  const start = (event: React.PointerEvent<HTMLElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drag.current = { x: event.clientX, y: event.clientY, from: box };
+  };
+  const move = (event: React.PointerEvent<HTMLElement>) => {
+    if (drag.current) setDragged(positionAt(event));
+  };
+  const release = (event: React.PointerEvent<HTMLElement>) => {
+    if (!drag.current) return;
+    const position = positionAt(event);
+    drag.current = null;
+    setDragged(position);
+    setError("");
+    doc.move_box(position).catch(error => { setDragged(null); setError(String(error)); });
+  };
+  const cancel = () => {
+    if (!drag.current) return; // lostpointercapture also fires right after a normal release.
+    drag.current = null;
+    setDragged(null);
+  };
+
+  return (
+    <section aria-label="Box" className="card">
+      <div className="card-head">
+        <h2 className="card-title">Box</h2>
+        <output className="coords">({box.x}, {box.y})</output>
+        <code className="action">move_box</code>
+      </div>
+      <div className="board">
+        <div aria-label="Draggable box" className="box"
+          style={{ left: `${(box.x / BOARD.width) * 100}%`, top: `${(box.y / BOARD.height) * 100}%` }}
+          onPointerDown={start} onPointerMove={move} onPointerUp={release}
+          onPointerCancel={cancel} onLostPointerCapture={cancel} />
+      </div>
+      {error && <p role="alert" className="alert">{error}</p>}
+    </section>
+  );
+}
+
+// Example 3: undo/redo step the shared doc back and forth, whoever made the change.
+// Buttons and Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z call the same actions.
+function History({ doc }: { doc: Shared }) {
+  const [error, setError] = useState("");
+  const run = (step: () => Promise<boolean>) => {
+    setError("");
+    step().catch(error => setError(String(error)));
+  };
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "z") return;
+      if (event.target instanceof HTMLInputElement) return; // Leave text-field undo to the browser.
+      event.preventDefault();
+      run(() => event.shiftKey ? doc.redo() : doc.undo());
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [doc]);
+
+  return (
+    <section aria-label="History" className="card">
+      <div className="card-head">
+        <h2 className="card-title">History</h2>
+        <code className="action">undo / redo</code>
+      </div>
+      <div className="row">
+        <button className="btn" onClick={() => run(() => doc.undo())}>Undo</button>
+        <button className="btn" onClick={() => run(() => doc.redo())}>Redo</button>
+      </div>
+      {error && <p role="alert" className="alert">{error}</p>}
+    </section>
+  );
+}
+
 createRoot(document.getElementById("root")!).render(<App />);

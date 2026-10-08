@@ -35,7 +35,7 @@ const oid = await getObserverID();
 
 op の戻り値はアプリの結果で、doc を自動同梱しません。op 完了時に React の再描画まで済んでいる保証はありません。古い取得結果のメソッドも通常の op を呼び、その取得時の revision に検査基準を固定しません。取得や成功によって観測を自動更新することもありません。
 
-`duet-mcp/react` の `useEdit<Value>()` / `EditSession<Value>` はローカル下書きを扱います。`begin(value)`、`setValue(value)`、`cancel()` と `submit(text => doc.set_text({ text }))` を使います。submit はセッションの現在の下書きを callback に渡すため、setValue 直後でも最新値を使います。非編集中・送信中の submit は例外です。begin と setValue は編集を開始し、cancel と送信成功で終了します。例外時は下書きを保持します。業務上の不成功を値で返す場合は callback 内で判定してください。観測 ID の管理は行いません。
+下書きは React の `useState` / `useRef` で管理します。成功時だけ破棄し、失敗時には値を保持してエラーを表示します。近接イベントからの重複送信には ref による同期的なガードを使います。ドラッグ終了時は setState 直後の state を読まず、そのハンドラで計算した値を Action に直接渡します。
 
 ## 状態・非同期処理・永続化
 
@@ -61,6 +61,7 @@ handler 内の `observers` は次の関数を提供します。
 |---|---|
 | `getObserverID()` | 新しい未観測 ID を発行。daemon 内では同期 |
 | `dispose(oid)` | ID を破棄し、その ID の待機を例外で終了 |
+| `get(oid)` | 観測済み revision、未観測なら `null` を返す。観測を進めない |
 | `observe(oid)` | 呼んだ時点の最新 revision を記録 |
 | `isCurrent(oid)` | 観測した revision と最新が一致すれば true |
 | `waitChange(oid, timeoutMs = 10_000, { signal } = {})` | 更新あり・未観測・不一致なら true、時間切れなら false |
@@ -94,9 +95,10 @@ set_text_if_current: action({
 
 | factory | 動作 |
 |---|---|
-| `guiUrl()` | 実際のポートの `{ url }` を返す |
+| `appInfo()` | `id`・`version`・`duet`・`url` を追加。app ID、app の版、duet-mcp の版、実際のポートの GUI URL を文字列で返す。`url: appInfo().url` のように必要なものだけ登録できる |
 | `awaitChange()` | `{ oid, timeoutMs? }` を受け、待機・**全文取得**・観測更新を行って doc を返す。初回は即時、時間切れでも取得・観測更新する |
 | `waitChange()` | 同じ入力で boolean だけ返す。取得・観測更新しない |
+| `historyOps()` | `undo()` と `redo()`。head が移動したかを boolean で返す |
 | `observerOps()` | `get_observer_id` と `dispose_observer({ oid })` を追加 |
 | `renderScreenshot({ selector?, viewport? })` | `{ path? }` を受け、別 Chromium セッションで共有 GUI を撮影 |
 | `blobOps({ directory, id? })` | `put_blob({ data, mime })` / `read_blob({ id })`。data は base64 |
@@ -113,7 +115,7 @@ MCP はオブジェクト入力をそのまま、スカラー・配列・union �
 
 `duet-mcp/server` の `runApp(app)` は runtime と stdio MCP を起動します。stdout は MCP 用に空けます。テンプレートは app の動的 import 前に console 出力を stderr へ向けています。
 
-Node runtime は同じ loopback ポートに集まり、一つだけが正本を持ちます。他の runtime は常時、doc・revision・観測記録を一組で複製します。別 app・protocol・app version がそのポートを使っていれば起動エラーになり、別ポートへは自動退避しません。任意ポートは `app.port`。`DUET_PORT` は app.port 未指定時だけ使う非推奨の移行用設定です。
+Node runtime は同じ loopback ポートに集まり、一つだけが正本を持ちます。他の runtime は常時、doc・revision・履歴（redo 部分を含む）・観測記録を一組で複製します。各接続の初回は checkpoint 全体、以降は revision の全順序・head の位置・観測記録と、前回送信した列に含まれない revision のスナップショットだけを送ります。通知がまとめられても、その列に残る履歴要素は欠けません。別 app・protocol・app version がそのポートを使っていれば起動エラーになり、別ポートへは自動退避しません。任意ポートは `app.port`。`DUET_PORT` は app.port 未指定時だけ使う非推奨の移行用設定です。
 
 daemon 終了時は次の MCP 呼び出しを待たず、生存 runtime が昇格します。ブラウザや一回取得の Node client は候補になりません。複製は非同期なので、成功直後の更新や ID 操作が失われる可能性があります。最初の完全コピーを受信する前に所有者が消えた場合、初期値で代用せず失敗します。
 
@@ -137,7 +139,7 @@ export default {
 };
 ```
 
-MCP client には `node` と `dist/template/main.js` の絶対パスを登録します。`runApp` は `duet-mcp/server`、生成された Node client の `getDoc` は `./duet/node` から読み込みます。GUI は `./duet/browser` の `useDoc` と `duet-mcp/react` の `useEdit` を使います。
+MCP client には `node` と `dist/template/main.js` の絶対パスを登録します。`runApp` は `duet-mcp/server`、生成された Node client の `getDoc` は `./duet/node` から読み込みます。GUI は `./duet/browser` の `useDoc` を使います。
 
 公開入口は `duet-mcp`、`duet-mcp/server`、`duet-mcp/react`、`duet-mcp/assets`、`duet-mcp/wire`、`duet-mcp/generate`。`lib/` の直接 import は内部 API です。
 
@@ -152,9 +154,7 @@ template/
   app.ts              状態型・初期値・操作・任意アセット
   main.ts             起動処理（stdout を MCP 用に空ける）
   ui/
-    main.tsx          画面と型付き操作の呼び出し
-    canvas.tsx        キャンバス描画とジェスチャー
-    edit-actions.tsx  各編集欄で共有する保存・取消ボタン
+    main.tsx          画面：Apply で送るテキストの下書きと、ドラッグを離した時に送るボックス
     style.css         見た目
     ...               HTML とビルド設定
   duet/               自動生成の client・接続設定。編集不要
@@ -163,3 +163,15 @@ template/
 
 GUI は app.ts を型としてだけ参照し、初期値は共有状態から取得します。ブラウザでアプリ定義を読み込んだり実行したりしません。操作の分割はアプリが大きくなってからで十分です。
 
+
+## 履歴と変更時の callback
+
+`defineApp` の `maxLen` は正の安全な整数です。既定値 `1` では現在値だけを保持し、undo/redo は常に `false` を返します。初期状態も1要素です。成功した `doc.update` は同じ値でも新しい revision を追加します。undo 後の更新は redo 部分を破棄し、上限を超えたら最古の要素から削除します。
+
+handler と setup の `doc.at(revision)` は、切り離された readonly スナップショットを返します。未知・切り捨て済みなら `null` です。`doc.undo()` / `doc.redo()` は head を1要素移動し、その成否を boolean で返します。移動先の revision を再利用し、seq を進めて GUI へ配信し、待機を解除します。端で動けなければ通知しません。観測記録は進めません。revision は時系列の順序を表しません。差分は `observers.get(oid)` と `doc.at(revision)` を使ってアプリが計算します。操作主体や履歴粒度の調整もアプリの責任です。`duet-mcp/assets` の `...historyOps()` を actions に追加すると、GUI・Node の型付きメソッドと MCP ツールから undo/redo を呼べます。
+
+`defineApp` は `onCommit({ revision, doc }, signal)`（update 成功時）と `onChange({ revision, doc }, signal)`（update 成功時と undo/redo の移動時）を受け取ります。初期化・複製の復元時には呼びません。更新確定後、State の通知の外で、onCommit、onChange の順に呼びます。引数は各変更時点の切り離されたスナップショットと所有権の AbortSignal で、doc の型は initialDoc から推論します。所有者だけで実行し、返り値は待ちません。同期例外と Promise の失敗はログに出し、更新を戻しません。保存の順序・再試行はアプリが扱い、revision を新旧の判別には使えません。外部接続は callback 内で遅延初期化するか setup で行い、モジュールの最上位で開始しないでください。
+
+## MCP への公開設定
+
+Action は既定で MCP に公開されます。`mcp: false` を付けると一覧から外し、MCP からの呼び出しは未知のツールとして扱います。description を省略でき、MCP 用の JSON Schema 検査を行わないため Zod preprocess なども使えます。JSON 入出力の検査と通常の Zod パースは維持します。HTTP manifest と GUI・Node の型付きメソッドには引き続き含まれます。**ツールの公開設定であり、アクセス制御ではありません。`/api/op/:name` からは呼べます。** アセットにも `undo: { ...historyOps().undo, mcp: false }` のように指定できます。

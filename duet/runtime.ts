@@ -1,3 +1,4 @@
+import { restoreReplica } from "./replica.js";
 import { serve } from "@hono/node-server";
 import type { Server } from "node:http";
 import { Engine } from "./engine.js";
@@ -20,6 +21,17 @@ export function validateCheckpoint(value: any, app: AppDef): asserts value is Ch
     if (!entry || typeof entry.id !== "string" || !entry.id || ids.has(entry.id) || (entry.revision !== null && typeof entry.revision !== "string")) throw new DuetError("InvalidCheckpoint");
     ids.add(entry.id);
   }
+  const history = value.history;
+  if (!history || !Array.isArray(history.entries) || history.entries.length < 1 || history.entries.length > (app.maxLen ?? 1) ||
+      !Number.isInteger(history.head) || history.head < 0 || history.head >= history.entries.length) throw new DuetError("InvalidCheckpoint");
+  const revisions = new Set<string>();
+  for (const entry of history.entries) {
+    if (!entry || typeof entry.revision !== "string" || !entry.revision || revisions.has(entry.revision) ||
+        !entry.doc || typeof entry.doc !== "object" || Array.isArray(entry.doc)) throw new DuetError("InvalidCheckpoint");
+    revisions.add(entry.revision); assertJson(entry.doc);
+  }
+  const head = history.entries[history.head];
+  if (head.revision !== value.revision || JSON.stringify(head.doc) !== JSON.stringify(value.doc)) throw new DuetError("InvalidCheckpoint");
   assertJson(value.doc);
 }
 export class Runtime {
@@ -85,8 +97,11 @@ export class Runtime {
         const timer = setInterval(() => { if (Date.now() - last > 3000) connection.abort(); }, 500);
         try {
           const response = await fetch(`${this.url}/internal/replica`, { signal, headers: { "x-duet-app-id": this.app.id, "x-duet-protocol": String(PROTOCOL), "x-duet-version": this.app.version } });
-          await consumeEvents(response, value => {
+          let replica: Checkpoint | undefined;
+          await consumeEvents(response, message => {
+            const value = restoreReplica(message, replica);
             validateCheckpoint(value, this.app);
+            replica = value;
             if (value.ownerId !== hello.ownerId) throw new DuetError("DaemonChanged");
             if (this.checkpoint?.ownerId === value.ownerId && value.checkpointSeq < this.checkpoint.checkpointSeq) return;
             this.checkpoint = value; started = true; this.readyResolve();

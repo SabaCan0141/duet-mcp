@@ -1,12 +1,29 @@
 import { defineApp, createAction, mergeActions } from "../duet/index.js";
-import { awaitChange, observerOps } from "../duet/assets.js";
+import { awaitChange, observerOps, historyOps, appInfo } from "../duet/assets.js";
 import type { ClientDoc } from "../duet/types.js";
 import { z } from "zod";
 type Doc = { text: string; count: number; mode: "a" | "b" };
 const action = createAction<Doc>();
 const more = { reset: action({ description: "reset", handler: ({ doc }) => { doc.update(s => { s.count = 0; }); } }) };
 const app = defineApp({ id: "types", version: "1", initialDoc: async (): Promise<Doc> => ({text: "", count: 0, mode: "a"}),
+  maxLen: 10,
+  onCommit: ({doc,revision},signal) => {
+    const text: string = doc.text; const id: string = revision; const aborted: boolean = signal.aborted;
+    // @ts-expect-error hook doc inferred from initialDoc
+    const wrong: number = doc.text;
+    // @ts-expect-error hook snapshot is readonly
+    doc.text = "bad";
+    void [text,id,aborted,wrong];
+  },
+  onChange: ({doc}) => {
+    // @ts-expect-error unknown field
+    doc.missing;
+  },
   actions: {
+    ...historyOps(),
+    hidden: action({mcp:false,input:z.string(),handler:({doc},text)=>doc.get().text+text}),
+    // A spread built-in with `mcp: false` must not erase the other actions' types.
+    version: { ...appInfo().version, mcp: false },
     ...more,
     set_text: action({ description: "set", input: z.string(), handler: ({doc}, text) => {
       doc.update(s => { s.text = text; });
@@ -25,6 +42,12 @@ const app = defineApp({ id: "types", version: "1", initialDoc: async (): Promise
   },
 });
 function types(doc: ClientDoc<typeof app>) {
+  const undo: Promise<boolean> = doc.undo();
+  const hidden: Promise<string> = doc.hidden("value");
+  const version: Promise<string> = doc.version();
+  // @ts-expect-error action types survive a spread built-in
+  doc.notAnAction();
+  void [undo,hidden,version];
   const a: Promise<{length: number}> = doc.set_text("hi");
   const b: Promise<number> = doc.size("123");
   const c: Promise<string> = doc.read();
@@ -51,6 +74,12 @@ void types;
 defineApp({id:"collision",version:"1",initialDoc:()=>({same:1}),actions: {same:createAction<{same:number}>()({description:"",handler:()=>{}})}});
 
 function invalidDefinitions() {
+  // @ts-expect-error public actions require a description
+  action({handler:()=>1});
+  // @ts-expect-error explicitly public actions require a description
+  action({mcp:true,handler:()=>1});
+  // @ts-expect-error history action names cannot collide with state fields
+  defineApp({id:"history-collision",version:"1",initialDoc:()=>({undo:0}),actions:historyOps()});
   const incompatible = createAction<{text: number}>();
   // @ts-expect-error action document type must match initialDoc
   defineApp({id:"mismatch",version:"1",initialDoc:()=>({text:""}),actions:{set:incompatible({description:"",handler:({doc})=>doc.get().text})}});

@@ -25,7 +25,7 @@ Vite が表示する URL を開き、テキスト編集やボックスのドラ�
 
 ```ts
 import { defineApp, createAction } from "duet-mcp";
-import { guiUrl, awaitChange, observerOps } from "duet-mcp/assets";
+import { appInfo, awaitChange, observerOps } from "duet-mcp/assets";
 import { z } from "zod";
 
 type Doc = { text: string };
@@ -44,7 +44,7 @@ export const app = defineApp({
         return { text };
       },
     }),
-    gui_url: guiUrl(),
+    url: appInfo().url,
     await_change: awaitChange(),
     ...observerOps(),
   },
@@ -55,11 +55,11 @@ handler の文書・入力・戻り値に型が付きます。自作操作と付
 
 GUI は `../duet/browser` から `useDoc` を import し、`const doc = useDoc()` の初期値 `null` を処理したら、**`await doc.set_text({ text: "hello" })`** で呼び出せます。Node は `./duet/node` の `getDoc` を import し、先に `await getDoc()` します。MCP も同じ `{ text: "hello" }` を渡します。
 
-下書きには `duet-mcp/react` の `useEdit` を使います。`edit.begin(doc.text)` で開始し、`edit.submit(text => doc.set_text({ text }))` で送信すると、callback に現在の下書きが渡ります。
+下書きは React の `useState` / `useRef` で管理します。Action が成功したときだけ下書きを破棄し、ドラッグ終了時はそのハンドラ内で計算した値を送信します。
 
 ## MCP client と接続する
 
-`npm run build` 後、MCP client に起動コマンド `node` と `dist/template/main.js` の絶対パスを登録します。テンプレートには GUI URL・観測・撮影・blob の操作が含まれます。撮影する場合は `npx playwright install chromium` で Chromium を入れてください。
+`npm run build` 後、MCP client に起動コマンド `node` と `dist/template/main.js` の絶対パスを登録します。テンプレートには GUI URL・観測・撮影・blob・undo/redo の操作が含まれます。撮影する場合は `npx playwright install chromium` で Chromium を入れてください。
 
 `npm run typecheck` で型検査できます。生成される `template/duet/browser.ts`・`node.ts`・`connection.ts` は編集不要です。
 

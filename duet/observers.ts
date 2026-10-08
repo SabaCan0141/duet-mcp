@@ -17,6 +17,7 @@ export class ObserverStore {
     this.require(id); this.records.delete(id); this.changed();
     for (const waiter of [...this.waiters]) if (waiter.id === id) waiter.finish(new DuetError("ObserverNotFound", `Disposed observer: ${id}`));
   }
+  get(id: string): string | null { this.require(id); return this.records.get(id)!; }
   observe(id: string): void { this.require(id); this.records.set(id, this.state.revision); this.changed(); }
   isCurrent(id: string): boolean { this.require(id); return this.records.get(id) === this.state.revision; }
   export(): Array<{id: string; revision: string | null}> { return [...this.records].map(([id, revision]) => ({ id, revision })); }

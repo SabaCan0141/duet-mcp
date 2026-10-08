@@ -35,15 +35,7 @@ const oid = await getObserverID(); // a new, initially unobserved ID
 
 An old snapshot's methods still call the current daemon. They do not automatically check the revision of that snapshot. Neither reads nor successful operations implicitly advance an observer.
 
-`useEdit<Value>()` and `EditSession<Value>` from `duet-mcp/react` keep local drafts:
-
-```ts
-edit.begin("draft");
-edit.setValue("revised draft");
-await edit.submit(text => doc.set_text({ text }));
-```
-
-`submit(value => ...)` passes the session’s current draft, including a synchronous `setValue()` immediately before submission. Submitting without an active edit, or while another submission is pending, throws. `begin` and `setValue` activate an edit; cancel and successful submission end it. A thrown error leaves the draft available. Business-level rejection returned as a value is up to your callback to interpret. Editing helpers do not manage observer IDs.
+Keep local drafts in React `useState` / `useRef`. Clear them only after a successful action; retain them and display the error on failure. Use a ref for a synchronous submission guard when adjacent events may both submit. For dragging, pass the value computed in the pointerup handler directly to the action instead of reading state immediately after `setState`.
 
 ## State, async work, and persistence
 
@@ -63,6 +55,14 @@ Async handlers can await databases or external work between synchronous updates.
 
 Keep UI-only drafts local. Shared state is a JSON object, not a database schema or a file format managed by duet.
 
+## History and change callbacks
+
+Set `maxLen` on `defineApp` to a positive safe integer. Its default, `1`, retains only the current state, so undo/redo always return `false`. The initial state counts toward this limit. Every successful `doc.update`, including an unchanged value, appends a fresh revision. A new update after undo discards redo entries; exceeding the limit discards the oldest entries.
+
+Within handlers and setup, `doc.at(revision)` returns a detached readonly snapshot or `null` if absent. `doc.undo()` and `doc.redo()` move one entry and return a boolean. They restore that entry's revision and publish the state to GUI subscribers and waiters with an increased sequence. A boundary no-op does not notify. They do not advance observations. Applications choose history granularity through their `doc.update` calls and implement comparisons using `observers.get(oid)` and `doc.at(revision)`; duet does not compute diffs or track who made an edit. Add `...historyOps()` from `duet-mcp/assets` to expose undo/redo as typed client actions and MCP tools.
+
+`defineApp` accepts `onCommit({ revision, doc }, signal)` for each successful update and `onChange({ revision, doc }, signal)` for updates and successful undo/redo. Initialization and replica restoration do not call them. After a commit, `onCommit` is invoked before `onChange`, outside State notifications. Each callback receives that transition's detached snapshot, inferred from `initialDoc`, and the ownership abort signal. Callbacks run only in the owner; their return values are not awaited. Synchronous throws and rejected promises are logged without rolling back the state. Applications handle save ordering and retries; revisions cannot be used to order saves. Open external connections lazily in callbacks or in setup, not at module scope.
+
 ## Explicit observations
 
 Within a handler or setup, `observers` provides:
@@ -71,6 +71,7 @@ Within a handler or setup, `observers` provides:
 |---|---|
 | `getObserverID()` | Create a new unobserved ID, synchronously inside the daemon |
 | `dispose(oid)` | Delete the ID and fail its pending waits |
+| `get(oid)` | Read the observed revision, or `null` before observation; does not advance it |
 | `observe(oid)` | Record the current revision for this ID |
 | `isCurrent(oid)` | True when its observed revision matches the current revision |
 | `waitChange(oid, timeoutMs = 10_000, { signal } = {})` | True after an update or if already unobserved/stale; false on timeout |
@@ -100,13 +101,16 @@ An `await` between the check and update permits intervening changes; check again
 
 ## Optional assets and MCP
 
+Actions are exposed to MCP by default. Set `mcp: false` on an action to omit it from the tool list and reject MCP calls to it. Its `description` becomes optional and its input schema skips MCP JSON Schema checks (so, for example, Zod preprocess is allowed). JSON input/result validation and normal Zod parsing still apply. The action remains in the HTTP manifest and typed GUI/Node clients. **This is tool visibility, not access control: `/api/op/:name` remains callable.** Built-in actions accept the same flag, for example `undo: { ...historyOps().undo, mcp: false }`.
+
 No tools are registered by default. Add built-in actions under the keys you want in `actions`, alongside your custom actions:
 
 | Factory from `duet-mcp/assets` | Operation behavior |
 |---|---|
-| `guiUrl()` | Return `{ url }` using the selected port |
+| `appInfo()` | Add `id`, `version`, `duet`, and `url`, returning the app ID, app version, duet-mcp version, and GUI URL (using the selected port) as strings. Pick the ones you need, for example `url: appInfo().url` |
 | `awaitChange()` | Input `{ oid, timeoutMs? }`; wait, read the **entire doc**, advance observation, return doc; also reads/observes on timeout |
 | `waitChange()` | Same input; return only the boolean wait result without observing |
+| `historyOps()` | Add `undo()` and `redo()`, each returning whether the head moved |
 | `observerOps()` | Add `get_observer_id` and `dispose_observer({ oid })` |
 | `renderScreenshot({ selector?, viewport? })` | Input `{ path? }`; capture the shared GUI in a separate Chromium session |
 | `blobOps({ directory, id? })` | Add `put_blob({ data, mime })` and `read_blob({ id })`; `data` is base64 |
@@ -123,11 +127,11 @@ Application results are JSON text; media assets can return MCP images. Exception
 
 `runApp(app)` from `duet-mcp/server` starts the runtime and MCP over stdio. Keep the entry module's stdout clear for MCP. The template redirects console output before dynamically importing the app.
 
-Each Node runtime tries the same loopback port. The owner holds the state; others delegate and continuously receive coherent checkpoints containing state, revision, and observation records. Another app, protocol, or app version at that port is an error. No automatic alternate port is chosen. Specify `app.port` when necessary. `DUET_PORT` is a deprecated fallback when `app.port` is absent.
+Each Node runtime tries the same loopback port. The owner holds the state; others delegate and continuously receive coherent checkpoints containing state, revision, history (including redo), and observation records. Each replica connection receives a full checkpoint first, then the ordered revision list, head position, observation records, and snapshots absent from its previous sent list. Coalesced notifications retain every history entry still in that list. Another app, protocol, or app version at that port is an error. No automatic alternate port is chosen. Specify `app.port` when necessary. `DUET_PORT` is a deprecated fallback when `app.port` is absent.
 
 If the owner exits, a surviving runtime takes over without waiting for a new MCP call. Browsers and one-shot Node clients are not takeover candidates. Replication is asynchronous: a successful recent update or observer change can be lost. A follower without its first complete checkpoint fails rather than inventing a replacement state.
 
-In-flight operations and waits fail across takeover and are **never automatically replayed**. A transport error can mean external effects already happened. An unknown result is reported as `OutcomeUnknown`; an identified owner change as `DaemonChanged`. GUI subscriptions reconnect and adopt the new owner's snapshot. Revision tokens are internal equality markers; owner identity is tracked separately.
+In-flight operations and waits fail across takeover and are **never automatically replayed**. A transport error can mean external effects already happened. An unknown result is reported as `OutcomeUnknown`; an identified owner change as `DaemonChanged`. GUI subscriptions reconnect and adopt the new owner's snapshot. Revision tokens identify content states, have no chronological ordering, and are reused when undo/redo returns to a retained state; owner identity is tracked separately.
 
 For an embedded runtime without stdio, use `await startRuntime(app)` and eventually `await runtime.stop()`.
 
@@ -147,7 +151,7 @@ export default {
 };
 ```
 
-Register `node` with the absolute path to `dist/template/main.js` in your MCP client. Runtime startup comes from `duet-mcp/server`; generated Node clients come from `./duet/node`. GUI state comes from `./duet/browser`, while `useEdit` comes from `duet-mcp/react`.
+Register `node` with the absolute path to `dist/template/main.js` in your MCP client. Runtime startup comes from `duet-mcp/server`; generated Node clients come from `./duet/node`. GUI state comes from `useDoc` in `./duet/browser`.
 
 Public entry points: `duet-mcp`, `duet-mcp/server`, `duet-mcp/react`, `duet-mcp/assets`, `duet-mcp/wire`, and `duet-mcp/generate`. Direct `lib/` imports are internal.
 
@@ -162,9 +166,7 @@ template/
   app.ts              State, initial values, operations, and optional assets
   main.ts             Startup (keeps stdout clear for MCP)
   ui/
-    main.tsx          Screen and typed operation calls
-    canvas.tsx        Canvas drawing and gestures
-    edit-actions.tsx  Save/cancel controls shared by the editors
+    main.tsx          Screen: a text draft sent with Apply, and a box sent on drag release
     style.css         Appearance
     ...               HTML and build configuration
   duet/               Generated client and connection modules; do not edit

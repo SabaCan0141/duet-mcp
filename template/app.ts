@@ -1,91 +1,45 @@
 import { fileURLToPath } from "node:url";
 import { defineApp, createAction } from "duet-mcp";
-import { guiUrl, awaitChange, observerOps, renderScreenshot, blobOps } from "duet-mcp/assets";
+import { appInfo, awaitChange, observerOps, renderScreenshot, blobOps, historyOps } from "duet-mcp/assets";
 import { z } from "zod";
 
-// Shared state and its operations live together. The GUI imports these types only.
-export type Box = { x: number; y: number; width: number; height: number };
-export type Settings = {
-  caption: string;
-  notes: string;
-  visible: boolean;
-  grid: boolean;
-  style: "solid" | "outline";
-  color: "violet" | "blue" | "coral";
-  opacity: number;
-};
-type Doc = { text: string; settings: Settings; box: Box };
+// The shared state. The GUI imports this type only, never the app itself.
+export type Doc = { text: string; box: { x: number; y: number } };
 
 const action = createAction<Doc>();
 
 export const app = defineApp({
   id: "template",
-  version: "0.7.0",
+  version: "0.8.0",
   rootDir: fileURLToPath(new URL("../../", import.meta.url)),
   webDist: "template/ui/dist",
-  initialDoc: (): Doc => ({
-    text: "",
-    settings: {
-      caption: "Make room for ideas.",
-      notes: "One idea, shaped together by you and AI.",
-      visible: true,
-      grid: true,
-      style: "solid",
-      color: "violet",
-      opacity: 100,
-    },
-    box: { x: 160, y: 120, width: 360, height: 220 },
-  }),
+  initialDoc: (): Doc => ({ text: "", box: { x: 40, y: 40 } }),
+  maxLen: 100, // Keep the last 100 states so undo/redo can step through them.
   actions: {
+    // Each action is defined once and callable from both the GUI and MCP.
     set_text: action({
-      description: "Replace the shared note text.",
+      description: "Replace the shared text.",
       input: z.object({ text: z.string() }),
       handler: ({ doc }, { text }) => {
         doc.update(state => { state.text = text; });
         return { text };
       },
     }),
-    set_settings: action({
-      description: "Set the canvas heading, notes, visibility, grid, style, color and opacity.",
-      input: z.object({
-        caption: z.string().max(80),
-        notes: z.string().max(500),
-        visible: z.boolean(),
-        grid: z.boolean(),
-        style: z.enum(["solid", "outline"]),
-        color: z.enum(["violet", "blue", "coral"]),
-        opacity: z.number().int().min(10).max(100),
-      }),
-      handler: ({ doc }, settings) => {
-        doc.update(state => { state.settings = settings; });
-      },
-    }),
-    set_box: action({
-      description: "Move or resize the box within the canvas.",
-      input: z.object({
-        x: z.number().min(0),
-        y: z.number().min(0),
-        width: z.number().min(64),
-        height: z.number().min(64),
-      }),
+    move_box: action({
+      description: "Move the box. The board is 400×240 and the box is 80×80, so x is 0–320 and y is 0–160.",
+      input: z.object({ x: z.number().min(0).max(320), y: z.number().min(0).max(160) }),
       handler: ({ doc }, box) => {
-        if (box.x + box.width > 720 || box.y + box.height > 480) {
-          throw new Error("Keep the box within the canvas bounds.");
-        }
         doc.update(state => { state.box = box; });
       },
     }),
 
-    gui_url: guiUrl(),
+    // Built-in actions for the LLM side.
+    url: appInfo().url,
+    version: { ...appInfo().version, mcp: false }, // GUI only: shown next to the title.
     await_change: awaitChange(),
     ...observerOps(),
-    render_screenshot: renderScreenshot({
-      selector: "#studio",
-      viewport: { w: 1440, h: 1150 },
-    }),
-    ...blobOps({
-      directory: fileURLToPath(new URL("../../data/", import.meta.url)),
-      id: "template",
-    }),
+    ...historyOps(), // undo / redo, shared by the GUI and the LLM.
+    render_screenshot: renderScreenshot(),
+    ...blobOps({ directory: fileURLToPath(new URL("../../data/", import.meta.url)), id: "template" }),
   },
 });
