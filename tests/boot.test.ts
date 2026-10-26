@@ -113,3 +113,35 @@ test("initialization failure releases the bound port and never substitutes empty
   const recovered=await startRuntime({...failed,initialDoc:()=>({restored:true})});
   assert.deepEqual(recovered.host.engine?.state.get(),{restored:true});await recovered.stop();
 });
+
+test("takeover off delegates without replication, stays off after owner loss, and accepts external restart",{timeout:10_000},async t=>{
+  const { Transport }=await import("../duet/transport.js");
+  const port=await freePort();let initialized=0;
+  const app=defineApp({id:"no-takeover",version:"1",port,initialDoc:()=>({n:++initialized}),actions:{}});
+  let owner=await startRuntime(app,{takeover:false});
+  assert.equal(owner.isOwner,true);
+  const requests:string[]=[];const originalFetch=globalThis.fetch;
+  t.mock.method(globalThis,"fetch",((url:any,init:any)=>{requests.push(String(url));return originalFetch(url,init);}) as typeof fetch);
+  const follower=await startRuntime(app,{takeover:false});
+  const client=new Transport({url:follower.url,id:app.id,version:app.version});
+  try {
+    assert.equal(follower.isOwner,false);
+    assert.equal(requests.some(url=>url.endsWith("/internal/replica")),false);
+    await assert.rejects(startRuntime({...app,version:"other"},{takeover:false}),{name:"VersionMismatch"});
+    const oid=await client.call<string>("/api/observers",{method:"POST"},true);
+    await owner.stop();
+    const count=requests.length;await new Promise(r=>setTimeout(r,150));
+    assert.equal(requests.length,count);assert.equal(follower.isOwner,false);
+    await assert.rejects(client.call("/api/doc"));
+    owner=await startRuntime(app,{takeover:false});
+    assert.equal((await client.call<any>("/api/doc")).doc.n,2);
+    await assert.rejects(client.call(`/api/observers/${oid}`,{method:"DELETE"},true),{name:"ObserverNotFound"});
+    const candidate=await startRuntime(app);
+    try {
+      await owner.stop();
+      await until(async()=>candidate.isOwner,v=>v);
+      assert.equal((await client.call<any>("/api/doc")).doc.n,2);
+      assert.equal(initialized,2);assert.equal(follower.isOwner,false);
+    } finally {await candidate.stop();}
+  } finally {await follower.stop();await owner.stop();}
+});

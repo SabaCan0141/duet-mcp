@@ -44,7 +44,7 @@ export function historyOps() {
     redo: { description: "Move the doc forward one revision. Returns false if there is nothing to redo.", handler: (ctx: Context<any>) => ctx.doc.redo() } as Action<any, undefined, boolean>,
   };
 }
-export type ScreenshotOptions = { selector?: string; viewport?: { w: number; h: number } };
+export type ScreenshotOptions = { channel?: "auto" | "chrome" | "msedge" | "chromium"; timeoutMs?: number; selector?: string; viewport?: { w: number; h: number } };
 export function renderScreenshot(options: ScreenshotOptions = {}) {
   return {
     description: "Capture the shared GUI in a separate browser session. Does not show a person's local draft or viewport.",

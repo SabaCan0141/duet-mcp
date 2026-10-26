@@ -100,10 +100,10 @@ set_text_if_current: action({
 | `waitChange()` | 同じ入力で boolean だけ返す。取得・観測更新しない |
 | `historyOps()` | `undo()` と `redo()`。head が移動したかを boolean で返す |
 | `observerOps()` | `get_observer_id` と `dispose_observer({ oid })` を追加 |
-| `renderScreenshot({ selector?, viewport? })` | `{ path? }` を受け、別 Chromium セッションで共有 GUI を撮影 |
+| `renderScreenshot({ selector?, viewport?, channel?, timeoutMs? })` | `{ path? }` を受け、別ブラウザセッションで共有 GUI を撮影 |
 | `blobOps({ directory, id? })` | `put_blob({ data, mime })` / `read_blob({ id })`。data は base64 |
 
-撮影する場合は `npx playwright install chromium`、Linux でシステム依存も必要なら `--with-deps` を使います。Chromium は撮影時に読み込みます。描画した owner・更新連番を待ちますが、人の下書き・スクロール位置やアプリ固有の非同期描画完了は保証しません。開発中は `DUET_SHOT_ORIGIN` に Vite の origin を指定できます。
+撮影では導入済み Chrome / Edge を利用できます。専用 Chromium を使う場合は `npx playwright install chromium`、Linux でシステム依存も必要なら `--with-deps` を使います。Playwright は撮影時に読み込みます。描画した owner・更新連番を待ちますが、人の下書き・スクロール位置やアプリ固有の非同期描画完了は保証しません。開発中は `DUET_SHOT_ORIGIN` に Vite の origin を指定できます。
 
 MCP はオブジェクト入力をそのまま、スカラー・配列・union を `{ value: input }` に変換します。導入例はオブジェクト入力なので GUI / Node / MCP とも `{ text: "hello" }` です。無入力は `{}`。daemon が各経路共通で Zod 検証と transform を行います。対応できないスキーマは起動時に op 名付きでエラーになります。
 
@@ -175,3 +175,13 @@ handler と setup の `doc.at(revision)` は、切り離された readonly ス�
 ## MCP への公開設定
 
 Action は既定で MCP に公開されます。`mcp: false` を付けると一覧から外し、MCP からの呼び出しは未知のツールとして扱います。description を省略でき、MCP 用の JSON Schema 検査を行わないため Zod preprocess なども使えます。JSON 入出力の検査と通常の Zod パースは維持します。HTTP manifest と GUI・Node の型付きメソッドには引き続き含まれます。**ツールの公開設定であり、アクセス制御ではありません。`/api/op/:name` からは呼べます。** アセットにも `undo: { ...historyOps().undo, mcp: false }` のように指定できます。
+
+## 撮影と起動の設定
+
+`renderScreenshot({ selector?, viewport?, channel?, timeoutMs? })` の `channel` は既定 `"auto"`。導入済み Chrome → Edge → Playwright 用 Chromium の順で選択します。`"chrome"`・`"msedge"`・`"chromium"` を指定すると、そのブラウザだけを使います。自動選択で次へ進むのは実行ファイル不在の場合だけで、起動・撮影失敗はそのまま返します。自動ダウンロードはしません。対応ブラウザがない場合は Chrome / Edge、または `npx playwright install chromium` で Chromium を導入します。Safari だけでは撮影できません。`"chromium"` は通常の Chromium の headless 起動を使うため、headless shell だけの導入では不足します。
+
+`timeoutMs` は正の安全な整数で、既定10,000。遷移・描画待機・フォント待機・撮影のそれぞれに適用します。合計期限やブラウザ起動期限ではありません。撮影範囲・owner 確認・終了処理は従来どおりです。
+
+`runApp(app, options?)`・`startRuntime(app, options?)`・`Runtime.start(app, options?)` は `takeover?: boolean` を持つ `RuntimeOptions` を受け取ります。型は `duet-mcp/server` から公開し、既定は `true` です。
+
+`{ takeover: false }` でも初回にポートが空いていれば owner になります。既存 owner がいれば互換性・準備完了を確認し（起動期限は従来の30秒）、複製受信・常駐監視・引き継ぎを行わず操作を転送します。owner 不在中の操作は失敗しますが接続役は残り、外部再起動後は次の操作から利用できます。失敗した操作の再実行はしません。状態復元は `initialDoc()` とアプリの永続化に依存し、古い observer ID が無効になる場合があります。設定はプロセス単位で、off の owner も on の接続役への複製は提供します。GUI の再接続と開発時の再起動は変わりません。

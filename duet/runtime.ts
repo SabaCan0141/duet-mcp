@@ -34,6 +34,7 @@ export function validateCheckpoint(value: any, app: AppDef): asserts value is Ch
   if (head.revision !== value.revision || JSON.stringify(head.doc) !== JSON.stringify(value.doc)) throw new DuetError("InvalidCheckpoint");
   assertJson(value.doc);
 }
+export type RuntimeOptions = { takeover?: boolean };
 export class Runtime {
   readonly host: Host;
   private server?: Server;
@@ -46,11 +47,11 @@ export class Runtime {
   private readyResolve!: () => void;
   private readyReject!: (error: unknown) => void;
   readonly ready = new Promise<void>((resolve, reject) => { this.readyResolve = resolve; this.readyReject = reject; });
-  private constructor(readonly app: AppDef) { this.host = { url: baseUrlFor(app.id, app.port), ready: false }; }
-  static async start(app: AppDef): Promise<Runtime> {
+  private constructor(readonly app: AppDef, private readonly options: RuntimeOptions) { this.host = { url: baseUrlFor(app.id, app.port), ready: false }; }
+  static async start(app: AppDef, options: RuntimeOptions = {}): Promise<Runtime> {
     validateOps(app);
     if (app.port === undefined && process.env.DUET_PORT) console.error("[duet] DUET_PORT is deprecated; set app.port instead.");
-    const runtime = new Runtime(app);
+    const runtime = new Runtime(app, options);
     runtime.loop = runtime.monitor().catch(async error => { runtime.readyReject(error); console.error("[duet] runtime failed:", error); await runtime.stop(); });
     try { await runtime.ready; return runtime; } catch (error) { await runtime.stop(); throw error; }
   }
@@ -81,7 +82,7 @@ export class Runtime {
     const startupDeadline = Date.now() + 30_000;
     let started = false;
     while (!this.stopped) {
-      if (await this.bind()) return;
+      if ((!this.followed || this.options.takeover !== false) && await this.bind()) return;
       this.followed = true;
       try {
         const res = await fetch(`${this.url}/api/hello`, { signal: AbortSignal.timeout(1500) });
@@ -91,6 +92,7 @@ export class Runtime {
         if (hello.protocol !== PROTOCOL) throw new DuetError("ProtocolMismatch");
         if (hello.version !== this.app.version) throw new DuetError("VersionMismatch");
         if (!hello.ready) { if (!started && Date.now() > startupDeadline) throw new DuetError("StartupTimeout"); await pause(100); continue; }
+        if (this.options.takeover === false) { this.readyResolve(); return; }
         const connection = new AbortController();
         const signal = AbortSignal.any([connection.signal, this.controller.signal]);
         let last = Date.now();
@@ -131,4 +133,4 @@ export class Runtime {
   }
 
 }
-export const startRuntime = (app: AppDef): Promise<Runtime> => Runtime.start(app);
+export const startRuntime = (app: AppDef, options: RuntimeOptions = {}): Promise<Runtime> => Runtime.start(app, options);

@@ -112,10 +112,10 @@ No tools are registered by default. Add built-in actions under the keys you want
 | `waitChange()` | Same input; return only the boolean wait result without observing |
 | `historyOps()` | Add `undo()` and `redo()`, each returning whether the head moved |
 | `observerOps()` | Add `get_observer_id` and `dispose_observer({ oid })` |
-| `renderScreenshot({ selector?, viewport? })` | Input `{ path? }`; capture the shared GUI in a separate Chromium session |
+| `renderScreenshot({ selector?, viewport?, channel?, timeoutMs? })` | Input `{ path? }`; capture the shared GUI in a separate browser session |
 | `blobOps({ directory, id? })` | Add `put_blob({ data, mime })` and `read_blob({ id })`; `data` is base64 |
 
-Only explicit assets incur their work. Chromium is loaded for screenshots; install it with `npx playwright install chromium`. On Linux, `--with-deps` also installs required system libraries. Screenshots wait for the owner's rendered sequence; they do not capture a person's local draft, scroll position, or all app-specific asynchronous rendering. `DUET_SHOT_ORIGIN` can point to the Vite origin while developing.
+Only explicit assets incur their work. Playwright is loaded for screenshots; an installed Chrome or Edge can be used without downloading Chromium. Alternatively install Chromium with `npx playwright install chromium`. On Linux, `--with-deps` also installs required system libraries. Screenshots wait for the owner's rendered sequence; they do not capture a person's local draft, scroll position, or all app-specific asynchronous rendering. `DUET_SHOT_ORIGIN` can point to the Vite origin while developing.
 
 MCP object inputs expose their properties directly. Scalars, arrays, and unions use `{ value: input }`; for example, an action defined with `input: z.string()` takes `{ value: "hello" }` over MCP. The quickstart uses an object input, so both callers pass `{ text: "hello" }`. No-input operations take `{}`. The daemon performs the same Zod parsing for all callers, including transforms. Unsupported input-schema forms fail at startup with the operation name.
 
@@ -174,3 +174,13 @@ template/
 ```
 
 The GUI uses type-only imports from `app.ts` and reads initial values from the shared state. It never imports or executes the app definition in the browser. Split out operations later only when the app grows enough to benefit from it.
+
+## Screenshot and runtime options
+
+`renderScreenshot` defaults to `channel: "auto"`: installed Chrome, Edge, then Playwright Chromium. Explicit `"chrome"`, `"msedge"`, or `"chromium"` selects only that browser. Auto selection skips missing executables only; launch or capture failures are reported without switching browsers. No browser is downloaded automatically. If no supported browser is available, install Chrome/Edge or run `npx playwright install chromium`. Safari alone is insufficient. The `"chromium"` channel uses Playwright's full Chromium in headless mode; a headless-shell-only installation is insufficient.
+
+`timeoutMs` defaults to 10,000 and must be a positive safe integer. It applies separately to navigation, render readiness, font readiness, and screenshot capture, not to the combined duration or browser launch. Existing selector, viewport, owner checks, and cleanup remain in effect.
+
+`runApp(app, options?)`, `startRuntime(app, options?)`, and `Runtime.start(app, options?)` accept `RuntimeOptions` (exported from `duet-mcp/server`) with `takeover?: boolean`, defaulting to `true`.
+
+With `{ takeover: false }`, a runtime can become the initial owner if the port is free. If an owner already exists, it checks compatibility/readiness (the existing 30-second startup deadline) and delegates without receiving checkpoints, monitoring the owner, or trying to take over. Calls fail while the owner is absent; the delegate remains usable after an external restart, without replaying failed calls. State restoration then depends on `initialDoc()` and application persistence; old observer IDs may no longer exist. The option is per process: an owner started with takeover disabled still supplies replicas to enabled followers. GUI reconnection and development reloads are unchanged.

@@ -59,7 +59,7 @@ GUI は `../duet/browser` から `useDoc` を import し、`const doc = useDoc()
 
 ## MCP client と接続する
 
-`npm run build` 後、MCP client に起動コマンド `node` と `dist/template/main.js` の絶対パスを登録します。テンプレートには GUI URL・観測・撮影・blob・undo/redo の操作が含まれます。撮影する場合は `npx playwright install chromium` で Chromium を入れてください。
+`npm run build` 後、MCP client に起動コマンド `node` と `dist/template/main.js` の絶対パスを登録します。テンプレートには GUI URL・観測・撮影・blob・undo/redo の操作が含まれます。撮影は導入済みの Chrome → Edge → Playwright 用 Chromium の順に選択します。いずれもない場合は `npx playwright install chromium` で導入してください。`renderScreenshot({ channel: "chromium", timeoutMs: 10_000 })` でブラウザと撮影の各処理の待機期限を指定できます。
 
 `npm run typecheck` で型検査できます。生成される `template/duet/browser.ts`・`node.ts`・`connection.ts` は編集不要です。
 

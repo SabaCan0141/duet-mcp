@@ -59,7 +59,7 @@ Keep drafts in React `useState` / `useRef`. Clear a draft only after its action 
 
 ## Connect an MCP client
 
-Run `npm run build`, then configure your MCP client to launch `node` with the absolute path to `dist/template/main.js`. The template provides GUI URL, observation, screenshot, blob, and undo/redo actions. For screenshots, install Chromium with `npx playwright install chromium`.
+Run `npm run build`, then configure your MCP client to launch `node` with the absolute path to `dist/template/main.js`. The template provides GUI URL, observation, screenshot, blob, and undo/redo actions. Screenshots automatically use installed Chrome, Edge, then Playwright Chromium. If none is installed, run `npx playwright install chromium`. Use `renderScreenshot({ channel: "chromium", timeoutMs: 10_000 })` to select a browser and per-step capture timeout.
 
 Use `npm run typecheck` to check your app. Generated `template/duet/browser.ts`, `node.ts`, and `connection.ts` need no manual editing.
 
